@@ -84,7 +84,7 @@ git clone <this-repo> astrbot_plugin_rule_injector
 ## 环境
 
 - AstrBot `>=4.0.0,<5`
-- 平台适配器：`aiocqhttp`
+- 平台：不限。插件基于 AstrBot 的 `MessageType` 枚举判断会话类型，不依赖特定适配器。
 
 ## License
 
