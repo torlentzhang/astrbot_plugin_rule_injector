@@ -27,7 +27,7 @@ SCOPES = ("group", "private", "all")
     PLUGIN_NAME,
     "local",
     "把行为约束类规则按场景注入 system prompt",
-    "v0.1.0",
+    "0.1.0",
 )
 class RuleInjectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):

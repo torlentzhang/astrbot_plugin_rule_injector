@@ -2,7 +2,7 @@ name: astrbot_plugin_rule_injector
 display_name: 规则注入器
 short_desc: 把行为约束类规则按场景注入 system prompt，带独立 Web 配置页
 desc: 在每次 LLM 请求前把规则无条件追加到 system prompt 末尾，每条规则可单独开关、可指定生效范围（仅群聊 / 仅私聊 / 通用）、可拖拽排序。适合放「每条消息都要遵守」的行为约束——这类规则写在 skill 里不会生效，因为 skill 依赖模型主动读取正文；全塞进人格又会让每轮 prompt 变臃肿且无法按场景区分。附带独立的 Web 配置页面，列表 + 侧滑抽屉编辑，保存后立即生效无需重启。
-version: v0.1.0
+version: 0.1.0
 author: torlent
 repo: "https://github.com/torlentzhang/astrbot_plugin_rule_injector"
 astrbot_version: ">=4.0.0,<5"
