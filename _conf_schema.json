@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "type": "list",
+    "description": "规则列表",
+    "hint": "规则请到插件详情页的「规则配置」页面编辑，这里是数据存储，不要手改。",
+    "invisible": true,
+    "default": [],
+    "items": {
+      "id": { "type": "str", "description": "标识", "default": "" },
+      "name": { "type": "str", "description": "规则名称", "default": "" },
+      "enabled": { "type": "bool", "description": "是否启用", "default": true },
+      "scope": { "type": "str", "description": "生效范围", "default": "all" },
+      "content": { "type": "text", "description": "规则内容", "default": "" }
+    }
+  }
+}

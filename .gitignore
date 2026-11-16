@@ -1,0 +1,13 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 规则配置（含个人规则内容，不要上传）
+astrbot_plugin_rule_injector_config.json
+*_config.json
+config/
+
+# 编辑器
+.DS_Store
+.idea/
+.vscode/

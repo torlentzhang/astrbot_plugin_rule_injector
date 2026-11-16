@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>规则注入器</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div class="brand">
+          <h1>规则注入器</h1>
+          <p class="subtitle">每条规则在对话前原样追加到系统提示词末尾。</p>
+        </div>
+        <div class="header-actions">
+          <span id="status" class="status" role="status"></span>
+          <button id="add" type="button" class="btn-secondary">+ 新增规则</button>
+          <button id="save" type="button" class="btn-primary">保存</button>
+        </div>
+      </header>
+
+      <div id="rule-list" class="rule-list"></div>
+
+      <div class="list-actions">
+        <span id="counter" class="list-counter"></span>
+      </div>
+
+      <p class="footnote">
+        点击任意一行可以查看和编辑详细内容。按列表顺序从上到下拼接。
+        内容为空的规则会被忽略。保存后立即生效，无需重启。
+      </p>
+    </main>
+
+    <!-- 侧滑抽屉 -->
+    <div class="drawer-overlay" id="drawer-overlay"></div>
+    <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-hidden="true">
+      <header class="drawer-head">
+        <h2 id="drawer-title">编辑规则</h2>
+        <button type="button" class="drawer-close" id="drawer-close" aria-label="关闭">×</button>
+      </header>
+
+      <div class="drawer-body">
+        <label class="field-col">
+          <span class="field-label">名称</span>
+          <input type="text" id="d-name" class="text-input" maxlength="60" placeholder="给这条规则起个名字" />
+        </label>
+
+        <label class="field-col">
+          <span class="field-label">生效范围</span>
+          <select id="d-scope" class="text-input">
+            <option value="all">通用（群聊 + 私聊）</option>
+            <option value="group">仅群聊</option>
+            <option value="private">仅私聊</option>
+          </select>
+        </label>
+
+        <div class="field-col field-grow">
+          <div class="field-head">
+            <span class="field-label">规则内容</span>
+            <span class="chars" id="d-chars">0 字</span>
+          </div>
+          <textarea id="d-content" class="text-area" spellcheck="false" placeholder="规则正文，原样注入系统提示词"></textarea>
+        </div>
+      </div>
+
+      <footer class="drawer-foot">
+        <button type="button" class="btn-danger" id="d-delete">删除这条规则</button>
+        <button type="button" class="btn-primary" id="d-done">保存</button>
+      </footer>
+    </aside>
+
+    <!-- 确认对话框 -->
+    <div class="confirm-overlay" id="confirm-overlay" hidden>
+      <div class="confirm-box" role="alertdialog" aria-modal="true">
+        <p class="confirm-text" id="confirm-text"></p>
+        <div class="confirm-actions">
+          <button type="button" class="btn-secondary" id="confirm-cancel">取消</button>
+          <button type="button" class="btn-danger-solid" id="confirm-ok">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
