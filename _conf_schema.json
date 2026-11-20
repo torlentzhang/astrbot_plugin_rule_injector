@@ -6,11 +6,73 @@
     "invisible": true,
     "default": [],
     "items": {
-      "id": { "type": "str", "description": "标识", "default": "" },
-      "name": { "type": "str", "description": "规则名称", "default": "" },
-      "enabled": { "type": "bool", "description": "是否启用", "default": true },
-      "scope": { "type": "str", "description": "生效范围", "default": "all" },
-      "content": { "type": "text", "description": "规则内容", "default": "" }
+      "id": {
+        "type": "str",
+        "description": "标识",
+        "default": ""
+      },
+      "name": {
+        "type": "str",
+        "description": "规则名称",
+        "default": ""
+      },
+      "enabled": {
+        "type": "bool",
+        "description": "是否启用",
+        "default": true
+      },
+      "scope": {
+        "type": "str",
+        "description": "生效范围",
+        "default": "all"
+      },
+      "content": {
+        "type": "text",
+        "description": "规则内容",
+        "default": ""
+      }
+    }
+  },
+  "thought_chains": {
+    "type": "list",
+    "description": "思维链",
+    "hint": "请到插件详情页的「思维链」页面编辑，这里是数据存储，不要手改。每条包含一个关键词和对应规则：关键词为「思维链」时，插件会在发送前剥掉 <思维链>…</思维链>，但保留在会话历史里，模型下一轮仍看得到自己想过什么。",
+    "invisible": true,
+    "default": [
+      {
+        "id": "default-thought",
+        "name": "思维链",
+        "keyword": "思维链",
+        "enabled": true,
+        "content": "写得比说话长、可以写自己的反应、可以在心里复述他的话、可以没头没尾。使用第一人称，别跳出来评价自己演得像不像。"
+      }
+    ],
+    "items": {
+      "id": {
+        "type": "str",
+        "description": "标识",
+        "default": ""
+      },
+      "name": {
+        "type": "str",
+        "description": "名称",
+        "default": ""
+      },
+      "keyword": {
+        "type": "str",
+        "description": "关键词",
+        "default": ""
+      },
+      "enabled": {
+        "type": "bool",
+        "description": "是否启用",
+        "default": true
+      },
+      "content": {
+        "type": "text",
+        "description": "规则内容",
+        "default": ""
+      }
     }
   }
 }

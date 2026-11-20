@@ -1,0 +1,20 @@
+/** 与 AstrBot 插件页桥接的薄封装。 */
+
+export const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
+
+/** 剥掉桥接层可能包的 { data: ... } 外壳。 */
+export function unwrap(payload) {
+  if (payload && typeof payload === "object" && "data" in payload) return payload.data;
+  return payload;
+}
+
+/** 调接口并解包；data.ok === false 时抛出业务错误。 */
+export async function post(route, body) {
+  const data = unwrap(await bridge.apiPost(route, body)) || {};
+  if (data.ok === false) throw new Error(data.error || "请求被拒绝");
+  return data;
+}
+
+export async function get(route, params = {}) {
+  return unwrap(await bridge.apiGet(route, params)) || {};
+}

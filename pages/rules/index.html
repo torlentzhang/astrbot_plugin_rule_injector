@@ -11,28 +11,82 @@
       <header class="page-header">
         <div class="brand">
           <h1>规则注入器</h1>
-          <p class="subtitle">每条规则在对话前原样追加到系统提示词末尾。</p>
         </div>
         <div class="header-actions">
           <span id="status" class="status" role="status"></span>
-          <button id="add" type="button" class="btn-secondary">+ 新增规则</button>
-          <button id="save" type="button" class="btn-primary">保存</button>
         </div>
       </header>
 
-      <div id="rule-list" class="rule-list"></div>
+      <div class="toolbar">
+        <nav class="tabs" role="tablist">
+          <button
+            type="button"
+            class="tab is-active"
+            role="tab"
+            data-tab="rules"
+            aria-selected="true"
+          >
+            规则配置
+          </button>
+          <button
+            type="button"
+            class="tab"
+            role="tab"
+            data-tab="thoughts"
+            aria-selected="false"
+          >
+            自定义思维链
+          </button>
+        </nav>
 
-      <div class="list-actions">
-        <span id="counter" class="list-counter"></span>
+        <div class="toolbar-actions" data-for="rules">
+          <button id="add" type="button" class="btn-secondary">
+            + 新增规则
+          </button>
+          <button id="save" type="button" class="btn-primary">保存</button>
+        </div>
+
+        <div class="toolbar-actions" data-for="thoughts" hidden>
+          <button id="add-thought" type="button" class="btn-secondary">
+            + 新增思维链
+          </button>
+          <button id="save-thoughts" type="button" class="btn-primary">
+            保存
+          </button>
+        </div>
       </div>
 
-      <p class="footnote">
-        点击任意一行可以查看和编辑详细内容。按列表顺序从上到下拼接。
-        内容为空的规则会被忽略。保存后立即生效，无需重启。
-      </p>
+      <!-- 规则配置 -->
+      <section class="tab-panel is-active" data-panel="rules" role="tabpanel">
+        <p class="footnote footnote-top">
+          点击任意一行可以查看和编辑详细内容。按列表顺序从上到下拼接追加到末尾。
+          内容为空的规则会被忽略。保存后立即生效，无需重启。
+        </p>
+
+        <div id="rule-list" class="rule-list"></div>
+
+        <div class="list-actions">
+          <span id="counter" class="list-counter"></span>
+        </div>
+      </section>
+
+      <!-- 思维链 -->
+      <section class="tab-panel" data-panel="thoughts" role="tabpanel">
+        <p class="footnote footnote-top">
+          只写「怎么想」，标签和格式由插件拼好，效果：
+        </p>
+
+        <pre class="snippet">&lt;关键词&gt;这是你的内心活动（你写的内容）&lt;/关键词&gt;</pre>
+
+        <div id="thought-list" class="rule-list"></div>
+
+        <div class="list-actions">
+          <span id="thought-counter" class="list-counter"></span>
+        </div>
+      </section>
     </main>
 
-    <!-- 侧滑抽屉 -->
+    <!-- 规则抽屉 -->
     <div class="drawer-overlay" id="drawer-overlay"></div>
     <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-hidden="true">
       <header class="drawer-head">
@@ -67,6 +121,44 @@
       <footer class="drawer-foot">
         <button type="button" class="btn-danger" id="d-delete">删除这条规则</button>
         <button type="button" class="btn-primary" id="d-done">保存</button>
+      </footer>
+    </aside>
+
+    <!-- 思维链抽屉 -->
+    <div class="drawer-overlay" id="tdrawer-overlay"></div>
+    <aside class="drawer" id="tdrawer" role="dialog" aria-modal="true" aria-hidden="true">
+      <header class="drawer-head">
+        <h2 id="tdrawer-title">编辑思维链</h2>
+        <button type="button" class="drawer-close" id="tdrawer-close" aria-label="关闭">×</button>
+      </header>
+
+      <div class="drawer-body">
+        <label class="field-col">
+          <span class="field-label">名称</span>
+          <input type="text" id="t-name" class="text-input" maxlength="60" placeholder="给这条思维链起个名字" />
+        </label>
+
+        <label class="field-col">
+          <div class="field-head">
+            <span class="field-label">关键词</span>
+            <span class="chars">剥离 <code>&lt;关键词&gt;…&lt;/关键词&gt;</code></span>
+          </div>
+          <input type="text" id="t-keyword" class="text-input" maxlength="12" placeholder="例如：思维链" />
+          <span class="field-hint">不要用 think，会导致只有首轮生效。</span>
+        </label>
+
+        <div class="field-col field-grow">
+          <div class="field-head">
+            <span class="field-label">规则内容</span>
+            <span class="chars" id="t-chars">0 字</span>
+          </div>
+          <textarea id="t-content" class="text-area" spellcheck="false" placeholder="告诉模型怎么用这个标记写内心话"></textarea>
+        </div>
+      </div>
+
+      <footer class="drawer-foot">
+        <button type="button" class="btn-danger" id="t-delete">删除这条思维链</button>
+        <button type="button" class="btn-primary" id="t-done">保存</button>
       </footer>
     </aside>
 
