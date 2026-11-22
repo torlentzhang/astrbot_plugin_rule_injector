@@ -33,8 +33,9 @@ SCOPES = ("group", "private", "all")
 
 # 新增思维链时预填的内容。与 _conf_schema.json 里的默认值保持一致。
 DEFAULT_THOUGHT_RULE = (
-    "写得比说话长、可以写自己的反应、可以在心里复述他的话、可以没头没尾。"
-    "使用第一人称，别跳出来评价自己演得像不像。"
+    "这里是你的内心想法：写得比说话长、可以写自己的反应、"
+    "可以在心里复述他说的话、可以没头没尾，使用第一人称，"
+    "别跳出来评价自己演得像不像。"
 )
 
 
@@ -42,7 +43,7 @@ DEFAULT_THOUGHT_RULE = (
     PLUGIN_NAME,
     "local",
     "把行为约束类规则按场景注入 system prompt",
-    "0.2.0",
+    "0.2.1",
 )
 class RuleInjectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -160,17 +161,23 @@ class RuleInjectorPlugin(Star):
 
         blocks: list[str] = []
 
+        # 没有思维链时，规则原样拼上去即可
+        if not chains:
+            blocks.extend(rule["content"].strip() for rule in rules)
+            return "\n\n".join(blocks)
+
+        # 有思维链时：规则在前，最终格式在后
+        blocks.append("# 输出格式")
+        blocks.extend(rule["content"].strip() for rule in rules)
+
+        # 按关键词逐条生成最终格式，结尾的格式块位置最靠后、权重最高
+        blocks.append("**每次都必须按照如下最终格式输出**")
+        format_lines = ["最终格式："]
         for chain in chains:
             kw = chain["keyword"]
-            blocks.append("# 输出格式")
-            # 用户只写「怎么想」，这里把标签和示例拼好，让它内嵌在示例里
-            blocks.append(
-                f"<{kw}>这里是你的内心想法（{chain['content'].strip()}）</{kw}>\n"
-                "你发出去的话"
-            )
-
-        if rules:
-            blocks.extend(rule["content"].strip() for rule in rules)
+            format_lines.append(f"<{kw}>{chain['content'].strip()}</{kw}>")
+        format_lines.append("你说的话")
+        blocks.append("\n".join(format_lines))
 
         return "\n\n".join(blocks)
 
