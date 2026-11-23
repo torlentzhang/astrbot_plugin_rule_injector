@@ -227,6 +227,8 @@ body {
 .text-area::placeholder { color: #5a5f70; }
 .text-area:focus { border-color: var(--accent); }
 
+.text-area-short { flex: none; min-height: 84px; }
+
 /* ---------------- 确认对话框 ---------------- */
 
 .confirm-overlay {

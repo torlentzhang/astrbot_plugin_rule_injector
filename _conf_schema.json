@@ -72,6 +72,11 @@
         "type": "text",
         "description": "规则内容",
         "default": ""
+      },
+      "example_thought": {
+        "type": "text",
+        "description": "示例念头（可选，给模型示范标签里放具体念头；留空则复用规则内容）",
+        "default": ""
       }
     }
   }

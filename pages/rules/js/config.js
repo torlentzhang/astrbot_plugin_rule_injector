@@ -78,6 +78,8 @@ export const sections = {
       keyword: el("t-keyword"),
       content: el("t-content"),
       chars: el("t-chars"),
+      example: el("t-example"),
+      exampleChars: el("t-example-chars"),
       done: el("t-done"),
       del: el("t-delete"),
       close: el("tdrawer-close"),
@@ -96,6 +98,7 @@ export const sections = {
       keyword: "思维链",
       enabled: true,
       content: defaultThoughtRule || "",
+      example_thought: "",
     }),
   },
 };

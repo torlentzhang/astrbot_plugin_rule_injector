@@ -78,6 +78,10 @@
 
         <pre class="snippet">&lt;关键词&gt;这是你的内心活动（你写的内容）&lt;/关键词&gt;</pre>
 
+        <p class="footnote footnote-top">
+          每条链还能填「示例念头」，用一句真实的内心话示范标签里写什么，模型会更稳地照着输出。留空时自动复用规则内容，不会发给用户。
+        </p>
+
         <div id="thought-list" class="rule-list"></div>
 
         <div class="list-actions">
@@ -153,6 +157,15 @@
             <span class="chars" id="t-chars">0 字</span>
           </div>
           <textarea id="t-content" class="text-area" spellcheck="false" placeholder="告诉模型怎么用这个标记写内心话"></textarea>
+        </div>
+
+        <div class="field-col">
+          <div class="field-head">
+            <span class="field-label">示例念头（可选）</span>
+            <span class="chars" id="t-example-chars">0 字</span>
+          </div>
+          <textarea id="t-example" class="text-area text-area-short" maxlength="500" spellcheck="false" placeholder="写一句这条思维链的真实念头，例如：他突然找我，我有点意外。"></textarea>
+          <span class="field-hint">给模型示范「标签里放的是具体念头，不是规则文字」。留空则自动复用上面的规则内容。只用于注入示例，不会发给用户，也不写进会话历史。</span>
         </div>
       </div>
 

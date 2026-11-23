@@ -7,9 +7,11 @@ on_llm_request 阶段把规则直接追加到 system_prompt，按场景区分。
     [{"id": str, "name": str, "enabled": bool, "scope": "group|private|all", "content": str}]
 
 思维链存于 thought_chains 数组，每条自带关键词，关键词决定剥离用的标签：
-    [{"id": str, "name": str, "keyword": str, "enabled": bool, "content": str}]
-关键词为「思维链」时，发送前会剥掉 <思维链>…</思维链>，但内容保留在会话历史里，
-模型下一轮仍看得到自己想过什么。
+    [{"id": str, "name": str, "keyword": str, "enabled": bool, "content": str,
+      "example_thought": str}]
+发送前会剥掉 <关键词>…</关键词>，但内容保留在会话历史里，模型下一轮仍看得到自己想过什么。
+example_thought 是可选的示例念头，用来每轮动态拼一条少样本示例注入上下文，
+让模型看到「上一次就是这么输出的」；留空时回退复用 content。
 """
 
 import re
@@ -29,6 +31,7 @@ MAX_THOUGHT_CHAINS = 5
 MAX_NAME_CHARS = 60
 MAX_KEYWORD_CHARS = 12
 MAX_CONTENT_CHARS = 20000
+MAX_EXAMPLE_THOUGHT_CHARS = 500
 SCOPES = ("group", "private", "all")
 
 # 新增思维链时预填的内容。与 _conf_schema.json 里的默认值保持一致。
@@ -43,7 +46,7 @@ DEFAULT_THOUGHT_RULE = (
     PLUGIN_NAME,
     "local",
     "把行为约束类规则按场景注入 system prompt",
-    "0.2.1",
+    "0.2.2",
 )
 class RuleInjectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -196,6 +199,12 @@ class RuleInjectorPlugin(Star):
                 keyword = self._clean_keyword(item.get("keyword"))
                 if not keyword:
                     continue
+                example = item.get("example_thought")
+                example = (
+                    example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
+                    if isinstance(example, str)
+                    else ""
+                )
                 chains.append(
                     {
                         "id": str(item.get("id") or self._new_id()),
@@ -203,6 +212,7 @@ class RuleInjectorPlugin(Star):
                         "keyword": keyword,
                         "enabled": bool(item.get("enabled", True)),
                         "content": content,
+                        "example_thought": example,
                     }
                 )
 
@@ -217,24 +227,57 @@ class RuleInjectorPlugin(Star):
         return text[:MAX_KEYWORD_CHARS]
 
     def _thought_patterns(self) -> list[re.Pattern[str]]:
-        """按已启用的关键词编译剥离用的正则。"""
+        """按已启用的关键词编译剥离用的正则。
+
+        开标签要求完整，避免正文里出现关键词时被误伤；闭合标签容错，
+        尖括号左括号与斜杠都可选，兼容模型偶尔漏写斜杠的情况。
+        """
         patterns = []
         for chain in self._load_thought_chains():
             if not chain["enabled"]:
                 continue
             kw = re.escape(chain["keyword"])
             patterns.append(
-                re.compile(rf"<{kw}>.*?</{kw}>", re.DOTALL | re.IGNORECASE)
+                re.compile(
+                    rf"<\s*{kw}\s*>.*?<?\s*/?\s*{kw}\s*>",
+                    re.DOTALL | re.IGNORECASE,
+                )
             )
         return patterns
 
     # ---------------------------------------------------------------- 注入
 
+    def _build_fewshot(self) -> list[dict] | None:
+        """按当前启用的思维链拼一组一问一答的少样本示例。
+
+        标签名跟随 keyword，标签内容优先用 example_thought，留空时回退 content，
+        所以增删思维链后示例会自动同步，不用改人设配置或改代码。每条消息都带
+        _no_save，只进本轮请求、不写会话历史，不会逐轮累积。
+        """
+        chains = [
+            c
+            for c in self._load_thought_chains()
+            if c["enabled"] and c["content"].strip()
+        ]
+        if not chains:
+            return None
+
+        lines = []
+        for chain in chains:
+            thought = chain["example_thought"].strip() or chain["content"].strip()
+            lines.append(f"<{chain['keyword']}>{thought}</{chain['keyword']}>")
+        lines.append("嗯？怎么了")
+
+        return [
+            {"role": "user", "content": "在吗", "_no_save": True},
+            {"role": "assistant", "content": "\n".join(lines), "_no_save": True},
+        ]
+
     @filter.on_llm_request(priority=-1000)
     async def inject_rules(
         self, event: AstrMessageEvent, request: ProviderRequest
     ) -> None:
-        """在 LLM 请求前把规则追加到 system_prompt 末尾。"""
+        """在 LLM 请求前注入规则与少样本示例。"""
         block = self._collect(event)
         if not block:
             return
@@ -242,8 +285,17 @@ class RuleInjectorPlugin(Star):
         base = (request.system_prompt or "").rstrip()
         request.system_prompt = f"{base}\n\n{block}" if base else block
 
+        fewshot = self._build_fewshot()
+        if fewshot:
+            contexts = request.contexts
+            if isinstance(contexts, list):
+                contexts.extend(fewshot)
+
         scene = "群聊" if self._is_group(event) else "私聊"
-        logger.info(f"[{PLUGIN_NAME}] 已注入规则（{scene}，{len(block)} 字符）")
+        logger.info(
+            f"[{PLUGIN_NAME}] 已注入规则（{scene}，{len(block)} 字符，"
+            f"少样本示例 {len(fewshot) if fewshot else 0} 条）"
+        )
 
     # ---------------------------------------------------------------- 剥离
 
@@ -408,6 +460,12 @@ class RuleInjectorPlugin(Star):
                     "ok": False,
                     "error": f"第 {index + 1} 条思维链内容超过 {MAX_CONTENT_CHARS} 字符",
                 }
+            example = item.get("example_thought")
+            example = (
+                example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
+                if isinstance(example, str)
+                else ""
+            )
             keyword = self._clean_keyword(item.get("keyword"))
             if not keyword:
                 return {"ok": False, "error": f"第 {index + 1} 条思维链缺少关键词"}
@@ -429,6 +487,7 @@ class RuleInjectorPlugin(Star):
                     "keyword": keyword,
                     "enabled": bool(item.get("enabled", True)),
                     "content": content,
+                    "example_thought": example,
                 }
             )
 
@@ -554,6 +613,12 @@ class RuleInjectorPlugin(Star):
             return {"ok": False, "error": "content 必须是字符串"}
         if len(content) > MAX_CONTENT_CHARS:
             return {"ok": False, "error": f"内容超过 {MAX_CONTENT_CHARS} 字符"}
+        example = payload.get("example_thought")
+        example = (
+            example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
+            if isinstance(example, str)
+            else ""
+        )
         keyword = self._clean_keyword(payload.get("keyword"))
         if not keyword:
             return {"ok": False, "error": "关键词不能为空"}
@@ -579,6 +644,7 @@ class RuleInjectorPlugin(Star):
             existing["name"] = name
             existing["keyword"] = keyword
             existing["content"] = content
+            existing["example_thought"] = example
         else:
             if len(chains) >= MAX_THOUGHT_CHAINS:
                 return {"ok": False, "error": f"最多 {MAX_THOUGHT_CHAINS} 条思维链"}
@@ -592,6 +658,7 @@ class RuleInjectorPlugin(Star):
                     "keyword": keyword,
                     "enabled": True,
                     "content": content,
+                    "example_thought": example,
                 }
             )
 

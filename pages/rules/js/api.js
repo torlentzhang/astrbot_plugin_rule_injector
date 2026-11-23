@@ -30,6 +30,9 @@ export async function saveItem(key) {
   };
   if (draft.scope) payload.scope = draft.scope;
   if (draft.keyword) payload.keyword = draft.keyword;
+  if (draft.example_thought !== undefined) {
+    payload.example_thought = draft.example_thought;
+  }
 
   sec.drawer.done.disabled = true;
   status("保存中…");
@@ -81,6 +84,9 @@ export async function saveAll(key) {
     };
     if (item.scope !== undefined) out.scope = item.scope || "all";
     if (item.keyword !== undefined) out.keyword = item.keyword || "";
+    if (item.example_thought !== undefined) {
+      out.example_thought = item.example_thought || "";
+    }
     return out;
   });
 

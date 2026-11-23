@@ -7,6 +7,9 @@ import { renderList } from "./list.js";
 export function syncChars(key) {
   const d = sections[key].drawer;
   d.chars.textContent = `${d.content.value.length} 字`;
+  if (d.exampleChars) {
+    d.exampleChars.textContent = `${d.example.value.length} 字`;
+  }
 }
 
 export function openDrawer(key, index) {
@@ -21,6 +24,7 @@ export function openDrawer(key, index) {
   if (d.scope) d.scope.value = item.scope || "all";
   if (d.keyword) d.keyword.value = item.keyword || "";
   d.content.value = item.content || "";
+  if (d.example) d.example.value = item.example_thought || "";
   syncChars(key);
 
   d.root.classList.add("open");
@@ -44,6 +48,7 @@ export function readDrawer(key) {
   const out = { name: d.name.value.trim(), content: d.content.value };
   if (d.scope) out.scope = d.scope.value;
   if (d.keyword) out.keyword = d.keyword.value.trim();
+  if (d.example) out.example_thought = d.example.value.trim();
   return out;
 }
 
