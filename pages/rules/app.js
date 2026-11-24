@@ -6,9 +6,16 @@
 import { bridge, get } from "./js/bridge.js";
 import { sections, state } from "./js/config.js";
 import { renderList } from "./js/list.js";
-import { addItem, closeDrawer, openDrawer, syncChars } from "./js/drawer.js";
+import {
+  addItem,
+  closeDrawer,
+  openDrawer,
+  syncChars,
+  syncExample,
+} from "./js/drawer.js";
 import { deleteItem, saveAll, saveItem } from "./js/api.js";
 import { initTabs } from "./js/tabs.js";
+import { initExamples, renderExampleThoughts } from "./js/examples.js";
 
 const els = {
   status: document.getElementById("status"),
@@ -93,6 +100,13 @@ function bindSection(key) {
 
 Object.keys(sections).forEach(bindSection);
 
+// 示例场景跟着思维链那页的「保存」一起落盘
+Object.values(sections.thoughts.example).forEach((field) => {
+  field.addEventListener("input", () => {
+    document.dispatchEvent(new CustomEvent("list:dirty"));
+  });
+});
+
 // 列表行点击 → 开抽屉
 document.addEventListener("list:open", (e) => {
   const { key, index } = e.detail;
@@ -100,6 +114,7 @@ document.addEventListener("list:open", (e) => {
 });
 
 initTabs(() => setStatus(""));
+initExamples(saveAll);
 
 /* ---------------------------------------------------------------- 启动 */
 
@@ -115,8 +130,16 @@ async function load() {
     sections.thoughts.items = Array.isArray(data.thought_chains)
       ? data.thought_chains
       : [];
+    if (data.thought_example && typeof data.thought_example === "object") {
+      state.thoughtExample = {
+        user: data.thought_example.user || "",
+        reply: data.thought_example.reply || "",
+      };
+    }
+    syncExample();
     renderList("rules");
     renderList("thoughts");
+    renderExampleThoughts();
     setStatus("");
   } catch (err) {
     setStatus("读取失败：" + (err && err.message ? err.message : String(err)), "err");

@@ -33,6 +33,28 @@
       }
     }
   },
+  "thought_example": {
+    "type": "object",
+    "description": "少样本示例场景",
+    "hint": "请到插件详情页的「自定义思维链」页面编辑，这里是数据存储，不要手改。user 是示例里用户说的话，reply 是示例里角色最终回复；留空时分别回退为「在吗」与「嗯？怎么了」。",
+    "invisible": true,
+    "default": {
+      "user": "",
+      "reply": ""
+    },
+    "items": {
+      "user": {
+        "type": "text",
+        "description": "示例输入",
+        "default": ""
+      },
+      "reply": {
+        "type": "text",
+        "description": "示例回复",
+        "default": ""
+      }
+    }
+  },
   "thought_chains": {
     "type": "list",
     "description": "思维链",

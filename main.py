@@ -6,12 +6,19 @@ on_llm_request 阶段把规则直接追加到 system_prompt，按场景区分。
 规则存于配置文件的 rules 数组：
     [{"id": str, "name": str, "enabled": bool, "scope": "group|private|all", "content": str}]
 
-思维链存于 thought_chains 数组，每条自带关键词，关键词决定剥离用的标签：
+思维链存于 thought_chains 数组，每条自带关键词，关键词决定输出时的开标签：
     [{"id": str, "name": str, "keyword": str, "enabled": bool, "content": str,
       "example_thought": str}]
-发送前会剥掉 <关键词>…</关键词>，但内容保留在会话历史里，模型下一轮仍看得到自己想过什么。
+输出格式要求每段用自闭合标签起头（<关键词/>），正文用 <回复/> 起头；发送前只把
+<回复/> 之后的内容发给用户，思考区保留在会话历史里，模型下一轮仍看得到自己想过什么。
 example_thought 是可选的示例念头，用来每轮动态拼一条少样本示例注入上下文，
 让模型看到「上一次就是这么输出的」；留空时回退复用 content。
+
+全局的 thought_example 存一问一答的示例场景（user / reply），与每段念头一起
+拼成少样本：user / reply 留空时回退到内置的「在吗 / 嗯？怎么了」，保持兼容。
+
+规则块与少样本由 _assemble 统一拼装；实际注入与 Web 预览共用它，预览按
+前端草稿渲染，不改动已保存配置。
 """
 
 import re
@@ -32,7 +39,13 @@ MAX_NAME_CHARS = 60
 MAX_KEYWORD_CHARS = 12
 MAX_CONTENT_CHARS = 20000
 MAX_EXAMPLE_THOUGHT_CHARS = 500
+MAX_EXAMPLE_USER_CHARS = 500
+MAX_EXAMPLE_REPLY_CHARS = 500
 SCOPES = ("group", "private", "all")
+
+# 用户没配置 thought_example 时的回退示例，与改前行为一致
+DEFAULT_EXAMPLE_USER = "在吗"
+DEFAULT_EXAMPLE_REPLY = "嗯？怎么了"
 
 # 新增思维链时预填的内容。与 _conf_schema.json 里的默认值保持一致。
 DEFAULT_THOUGHT_RULE = (
@@ -46,7 +59,7 @@ DEFAULT_THOUGHT_RULE = (
     PLUGIN_NAME,
     "local",
     "把行为约束类规则按场景注入 system prompt",
-    "0.2.2",
+    "0.3.0",
 )
 class RuleInjectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -94,6 +107,12 @@ class RuleInjectorPlugin(Star):
             ["POST"],
             "删除单条思维链",
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/preview",
+            self.api_preview,
+            ["POST"],
+            "预览规则与少样本示例的拼装结果",
+        )
         logger.info(f"[{PLUGIN_NAME}] 已加载")
 
     # ---------------------------------------------------------------- 内部
@@ -108,9 +127,8 @@ class RuleInjectorPlugin(Star):
     def _new_id() -> str:
         return uuid.uuid4().hex[:8]
 
-    def _load_rules(self) -> list[dict]:
-        """读规则列表。"""
-        raw = self.config.get("rules")
+    def _normalize_rules(self, raw: object) -> list[dict]:
+        """规整规则列表，配置读取与预览草稿共用同一套口径。"""
         rules: list[dict] = []
 
         if isinstance(raw, list):
@@ -135,23 +153,40 @@ class RuleInjectorPlugin(Star):
 
         return rules[:MAX_RULES]
 
-    def _collect(self, event: AstrMessageEvent) -> str:
-        """收集当前场景该注入的内容并拼装。
+    def _load_rules(self) -> list[dict]:
+        """读规则列表。"""
+        return self._normalize_rules(self.config.get("rules"))
 
-        思维链的标签与格式由这里按关键词自动生成，用户只需要写
-        「怎么想」，不必自己操心标记和格式。
+    @staticmethod
+    def _scene_of(event: AstrMessageEvent) -> str:
+        """把事件映射成场景标识，注入与预览共用这一处口径。"""
+        return "group" if RuleInjectorPlugin._is_group(event) else "private"
+
+    def _snapshot(self) -> dict:
+        """当前已保存配置的快照，供注入与预览共用。"""
+        return {
+            "rules": self._load_rules(),
+            "thought_chains": self._load_thought_chains(),
+            "thought_example": self._load_thought_example(),
+        }
+
+    def _assemble(self, snapshot: dict, scene: str) -> dict:
+        """把配置快照拼成实际注入的两部分。
+
+        系统提示词块与少样本示例都在这里生成，注入钩子与预览接口共用，
+        保证「预览所见」就是「实际所发」。标签与格式按关键词动态生成，
+        数量随启用的思维链变化。
         """
         chains = [
             c
-            for c in self._load_thought_chains()
-            if c["enabled"] and c["content"].strip()
+            for c in snapshot.get("thought_chains", [])
+            if c.get("enabled") and c["content"].strip()
         ]
-
-        is_group = self._is_group(event)
+        is_group = scene == "group"
         rules = [
             r
-            for r in self._load_rules()
-            if r["enabled"]
+            for r in snapshot.get("rules", [])
+            if r.get("enabled")
             and r["content"].strip()
             and (
                 r["scope"] == "all"
@@ -159,34 +194,75 @@ class RuleInjectorPlugin(Star):
             )
         ]
 
-        if not chains and not rules:
-            return ""
-
         blocks: list[str] = []
-
-        # 没有思维链时，规则原样拼上去即可
         if not chains:
+            # 没有思维链时，规则原样拼上去即可
             blocks.extend(rule["content"].strip() for rule in rules)
-            return "\n\n".join(blocks)
+        else:
+            # 有思维链时：规则自成一个标题，「输出格式」另起一个标题，两者不混排
+            if rules:
+                blocks.append("# 行为规则")
+                blocks.extend(rule["content"].strip() for rule in rules)
 
-        # 有思维链时：规则在前，最终格式在后
-        blocks.append("# 输出格式")
-        blocks.extend(rule["content"].strip() for rule in rules)
+            # 按启用的思维链动态生成写作要求与最终格式，数量随配置变化
+            lines = [
+                "# 输出格式",
+                "",
+                "每次回复前，按顺序完成下列每一段思考，再输出正文。",
+                "这些思考段是递进关系，不是可选项：后一段必须建立在前一段的结论之上；",
+                "若各段结论有冲突，只在最后一段消化冲突，并只保留一个最终决定。",
+                "你的回复必须是最后一段思考结论的自然表达，不得与之相矛盾。",
+                "",
+                "各段写作要求：",
+            ]
+            for chain in chains:
+                lines.append(f"- {chain['keyword']}：{chain['content'].strip()}")
+            lines.extend(
+                [
+                    "",
+                    "最终格式（每段用一个自闭合标签起头，标签后直接写内容；不要写任何闭标签）：",
+                ]
+            )
+            for chain in chains:
+                kw = chain["keyword"]
+                lines.append(f"<{kw}/>（写下这一段的思考）")
+            lines.extend(
+                [
+                    "<回复/>你要发给用户的话",
+                    "",
+                    "【硬约束】",
+                    "1. <回复/> 只写一次，且只在所有思考段写完后出现，它之后的内容才是正文。",
+                    "2. 正文只表达最后一段定下的决定，不得引入与任一思考段矛盾的新立场。",
+                ]
+            )
+            blocks.append("\n".join(lines))
 
-        # 按关键词逐条生成最终格式，结尾的格式块位置最靠后、权重最高
-        blocks.append("**每次都必须按照如下最终格式输出**")
-        format_lines = ["最终格式："]
-        for chain in chains:
-            kw = chain["keyword"]
-            format_lines.append(f"<{kw}>{chain['content'].strip()}</{kw}>")
-        format_lines.append("你说的话")
-        blocks.append("\n".join(format_lines))
+        block = "\n\n".join(blocks)
+        if not block:
+            # 与原 inject_rules 的提前返回一致：无可注入内容时两部分都为空
+            return {"system_prompt_block": "", "contexts": []}
 
-        return "\n\n".join(blocks)
+        contexts: list[dict] = []
+        if chains:
+            example = snapshot.get("thought_example") or {}
+            lines = []
+            for chain in chains:
+                thought = chain["example_thought"].strip() or chain["content"].strip()
+                lines.append(f"<{chain['keyword']}/>{thought}")
+            lines.append(f"<回复/>{example.get('reply') or DEFAULT_EXAMPLE_REPLY}")
+            contexts = [
+                {
+                    "role": "user",
+                    "content": example.get("user") or DEFAULT_EXAMPLE_USER,
+                    "_no_save": True,
+                },
+                {"role": "assistant", "content": "\n".join(lines), "_no_save": True},
+            ]
 
-    def _load_thought_chains(self) -> list[dict]:
-        """读思维链列表。"""
-        raw = self.config.get("thought_chains")
+        return {"system_prompt_block": block, "contexts": contexts}
+
+    def _normalize_chains(self, raw: object) -> list[dict]:
+        """规整思维链列表，配置读取与预览草稿共用同一套口径。"""
         chains: list[dict] = []
 
         if isinstance(raw, list):
@@ -199,11 +275,8 @@ class RuleInjectorPlugin(Star):
                 keyword = self._clean_keyword(item.get("keyword"))
                 if not keyword:
                     continue
-                example = item.get("example_thought")
-                example = (
-                    example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
-                    if isinstance(example, str)
-                    else ""
+                example = self._clean_example(
+                    item.get("example_thought"), MAX_EXAMPLE_THOUGHT_CHARS
                 )
                 chains.append(
                     {
@@ -218,6 +291,10 @@ class RuleInjectorPlugin(Star):
 
         return chains[:MAX_THOUGHT_CHAINS]
 
+    def _load_thought_chains(self) -> list[dict]:
+        """读思维链列表。"""
+        return self._normalize_chains(self.config.get("thought_chains"))
+
     @staticmethod
     def _clean_keyword(raw: object) -> str:
         """规整关键词：去掉尖括号与空白，只留裸词。"""
@@ -226,33 +303,131 @@ class RuleInjectorPlugin(Star):
             text = text.replace(token, "")
         return text[:MAX_KEYWORD_CHARS]
 
-    def _thought_patterns(self) -> list[re.Pattern[str]]:
-        """按已启用的关键词编译剥离用的正则。
+    @staticmethod
+    def _clean_example(raw: object, limit: int) -> str:
+        """规整示例文本：去首尾空白并截断，非字符串一律当留空。"""
+        return raw.strip()[:limit] if isinstance(raw, str) else ""
 
-        开标签要求完整，避免正文里出现关键词时被误伤；闭合标签容错，
-        尖括号左括号与斜杠都可选，兼容模型偶尔漏写斜杠的情况。
+    def _normalize_thought_example(self, raw: object) -> dict:
+        """规整全局示例场景；留空的字段不在这里补默认值，交给拼装处回退。"""
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "user": self._clean_example(raw.get("user"), MAX_EXAMPLE_USER_CHARS),
+            "reply": self._clean_example(raw.get("reply"), MAX_EXAMPLE_REPLY_CHARS),
+        }
+
+    def _load_thought_example(self) -> dict:
+        """读全局示例场景。"""
+        return self._normalize_thought_example(self.config.get("thought_example"))
+
+    def _strip_thought_text(
+        self, text: str, chains: list[dict]
+    ) -> tuple[str, str | None]:
+        """剥掉一段文本里的思考区，返回 (正文, 命中方式)。
+
+        命中方式：reply（<回复/> 自闭合标记）、reply_only（无思考段的孤立
+        <回复/>）、marker（回复：标记）、closing（旧闭标签）、fallback（末段
+        边界）、drop（无边界，整段丢弃）、None（没有思考区，原文返回）。
         """
-        patterns = []
-        for chain in self._load_thought_chains():
-            if not chain["enabled"]:
-                continue
-            kw = re.escape(chain["keyword"])
-            patterns.append(
-                re.compile(
-                    rf"<\s*{kw}\s*>.*?<?\s*/?\s*{kw}\s*>",
-                    re.DOTALL | re.IGNORECASE,
-                )
+        keywords = [c["keyword"] for c in chains]
+
+        # 工具调用后的那一轮可能只输出 <回复/>正文，没有思考段。
+        # 这种孤立标记也要剥掉，否则 <回复/> 会原样发给用户。
+        lone = re.match(r"\s*<\s*回复\s*/?\s*>", text, re.IGNORECASE)
+        if lone:
+            body = re.sub(r"^\s*<qq_message_id[^>]*>\s*", "", text[lone.end() :])
+            return body.strip(), "reply_only"
+
+        # 按配置顺序定位标签；自闭合 <kw/> 与旧开标签 <kw> 都认，
+        # 首标签前只能有空白，避免误判普通消息
+        hits: list[tuple[int, int]] = []
+        cursor = 0
+        for kw in keywords:
+            m = re.search(
+                rf"<\s*{re.escape(kw)}\s*/?\s*>", text[cursor:], re.IGNORECASE
             )
-        return patterns
+            if m is None:
+                return text, None
+            hits.append((cursor + m.start(), cursor + m.end()))
+            cursor += m.end()
+        if text[: hits[0][0]].strip():
+            return text, None
+
+        tail = text[hits[-1][1] :]
+
+        # 主路径：<回复/> 自闭合标记之后就是正文，兼容写成 <回复> 的情况
+        reply = re.search(r"<\s*回复\s*/?\s*>", tail, re.IGNORECASE)
+        if reply:
+            body = tail[reply.end() :]
+            body = re.sub(r"^\s*<qq_message_id[^>]*>\s*", "", body)
+            return body.strip(), "reply"
+
+        # 兼容上一版：最后一个标签之后的「回复：」是正文起点
+        marker = re.search(r"(?m)^\s*回复\s*[：:]\s*", tail) or re.search(
+            r"回复\s*[：:]\s*", tail
+        )
+        if marker:
+            body = tail[marker.end() :]
+            body = re.sub(r"^\s*<qq_message_id[^>]*>\s*", "", body)
+            return body.strip(), "marker"
+
+        # 兼容旧格式：成对或畸形闭标签仍能命中时直接剥掉
+        out = text
+        for kw in keywords:
+            out = re.sub(
+                rf"<\s*{re.escape(kw)}\s*>.*?<?\s*/?\s*{re.escape(kw)}\s*>",
+                "",
+                out,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+        if out != text:
+            out = re.sub(r"^\s*回复\s*[：:]\s*", "", out)
+            return out.strip(), "closing"
+
+        # 兜底：末段第一个「其后不是换行」的换行符当边界
+        boundary = re.search(r"\n(?=[^\n])", tail)
+        if boundary is None:
+            return "", "drop"
+        body = tail[boundary.end() :]
+        body = re.sub(r"^\s*<qq_message_id[^>]*>\s*", "", body)
+        return body.strip(), "fallback"
 
     # ---------------------------------------------------------------- 注入
 
-    def _build_fewshot(self) -> list[dict] | None:
-        """按当前启用的思维链拼一组一问一答的少样本示例。
+    @filter.on_llm_request(priority=-1000)
+    async def inject_rules(
+        self, event: AstrMessageEvent, request: ProviderRequest
+    ) -> None:
+        """在 LLM 请求前注入规则与少样本示例。"""
+        scene_key = self._scene_of(event)
+        result = self._assemble(self._snapshot(), scene_key)
+        block = result["system_prompt_block"]
+        if not block:
+            return
 
-        标签名跟随 keyword，标签内容优先用 example_thought，留空时回退 content，
-        所以增删思维链后示例会自动同步，不用改人设配置或改代码。每条消息都带
-        _no_save，只进本轮请求、不写会话历史，不会逐轮累积。
+        base = (request.system_prompt or "").rstrip()
+        request.system_prompt = f"{base}\n\n{block}" if base else block
+
+        fewshot = result["contexts"]
+        if fewshot:
+            contexts = request.contexts
+            if isinstance(contexts, list):
+                contexts.extend(fewshot)
+
+        scene = "群聊" if scene_key == "group" else "私聊"
+        logger.info(
+            f"[{PLUGIN_NAME}] 已注入规则（{scene}，{len(block)} 字符，"
+            f"少样本示例 {len(fewshot)} 条）"
+        )
+
+    # ---------------------------------------------------------------- 剥离
+
+    @filter.on_decorating_result()
+    async def strip_thought(self, event: AstrMessageEvent) -> None:
+        """发送前剥掉思考区，只把「回复：」之后的正文发出去。
+
+        思考区本身要留在会话历史里，模型下一轮才看得到格式先例。
         """
         chains = [
             c
@@ -260,53 +435,6 @@ class RuleInjectorPlugin(Star):
             if c["enabled"] and c["content"].strip()
         ]
         if not chains:
-            return None
-
-        lines = []
-        for chain in chains:
-            thought = chain["example_thought"].strip() or chain["content"].strip()
-            lines.append(f"<{chain['keyword']}>{thought}</{chain['keyword']}>")
-        lines.append("嗯？怎么了")
-
-        return [
-            {"role": "user", "content": "在吗", "_no_save": True},
-            {"role": "assistant", "content": "\n".join(lines), "_no_save": True},
-        ]
-
-    @filter.on_llm_request(priority=-1000)
-    async def inject_rules(
-        self, event: AstrMessageEvent, request: ProviderRequest
-    ) -> None:
-        """在 LLM 请求前注入规则与少样本示例。"""
-        block = self._collect(event)
-        if not block:
-            return
-
-        base = (request.system_prompt or "").rstrip()
-        request.system_prompt = f"{base}\n\n{block}" if base else block
-
-        fewshot = self._build_fewshot()
-        if fewshot:
-            contexts = request.contexts
-            if isinstance(contexts, list):
-                contexts.extend(fewshot)
-
-        scene = "群聊" if self._is_group(event) else "私聊"
-        logger.info(
-            f"[{PLUGIN_NAME}] 已注入规则（{scene}，{len(block)} 字符，"
-            f"少样本示例 {len(fewshot) if fewshot else 0} 条）"
-        )
-
-    # ---------------------------------------------------------------- 剥离
-
-    @filter.on_decorating_result()
-    async def strip_thought(self, event: AstrMessageEvent) -> None:
-        """发送前剥掉思维链段，只把正文发出去。
-
-        思维链本身要留在会话历史里，模型下一轮才看得到格式先例。
-        """
-        patterns = self._thought_patterns()
-        if not patterns:
             return
 
         result = event.get_result()
@@ -314,19 +442,17 @@ class RuleInjectorPlugin(Star):
             return
 
         stripped = False
+        modes: set[str] = set()
         kept: list = []
         for comp in result.chain:
             if isinstance(comp, Plain):
-                text = comp.text
-                for pattern in patterns:
-                    text = pattern.sub("", text)
-                if text != comp.text:
+                body, mode = self._strip_thought_text(comp.text, chains)
+                if mode is not None:
                     stripped = True
-                    text = text.strip()
-                    if text:
-                        comp.text = text
-                        kept.append(comp)
-                    continue
+                    modes.add(mode)
+                    if not body:
+                        continue
+                    comp.text = body
             kept.append(comp)
 
         if not stripped:
@@ -335,11 +461,13 @@ class RuleInjectorPlugin(Star):
         if kept:
             result.chain = kept
         else:
-            # 整条回复只有思维链，没有正文，不发送
+            # 整条回复只有思考区，没有正文，不发送
             event.set_result(None)
 
         scene = "群聊" if self._is_group(event) else "私聊"
-        logger.info(f"[{PLUGIN_NAME}] 已剥离思维链（{scene}）")
+        logger.info(
+            f"[{PLUGIN_NAME}] 已剥离思考区（{scene}，方式：{'/'.join(sorted(modes))}）"
+        )
 
     # ---------------------------------------------------------------- Web API
 
@@ -348,14 +476,58 @@ class RuleInjectorPlugin(Star):
         return {
             "rules": self._load_rules(),
             "thought_chains": self._load_thought_chains(),
+            "thought_example": self._load_thought_example(),
             "limits": {
                 "max_rules": MAX_RULES,
                 "max_thought_chains": MAX_THOUGHT_CHAINS,
                 "max_name_chars": MAX_NAME_CHARS,
                 "max_keyword_chars": MAX_KEYWORD_CHARS,
                 "max_content_chars": MAX_CONTENT_CHARS,
+                "max_example_thought_chars": MAX_EXAMPLE_THOUGHT_CHARS,
+                "max_example_user_chars": MAX_EXAMPLE_USER_CHARS,
+                "max_example_reply_chars": MAX_EXAMPLE_REPLY_CHARS,
             },
             "default_thought_rule": DEFAULT_THOUGHT_RULE,
+        }
+
+    async def api_preview(self):
+        """预览实际注入的两部分；只读，不改变已保存的配置。
+
+        前端可传入未保存的草稿，预览按草稿渲染，source 标明内容来源。
+        """
+        payload = await web_request.json(default={})
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        scene = payload.get("scene")
+        if scene not in ("group", "private"):
+            return {"ok": False, "error": "scene 必须是 group 或 private"}
+
+        snapshot = self._snapshot()
+        source = "saved"
+        draft = payload.get("draft")
+        if draft is not None:
+            if not isinstance(draft, dict):
+                return {"ok": False, "error": "draft 必须是 JSON 对象"}
+            source = "draft"
+            if "rules" in draft:
+                snapshot["rules"] = self._normalize_rules(draft["rules"])
+            if "thought_chains" in draft:
+                snapshot["thought_chains"] = self._normalize_chains(
+                    draft["thought_chains"]
+                )
+            if "thought_example" in draft:
+                snapshot["thought_example"] = self._normalize_thought_example(
+                    draft["thought_example"]
+                )
+
+        result = self._assemble(snapshot, scene)
+        return {
+            "ok": True,
+            "scene": scene,
+            "source": source,
+            "system_prompt_block": result["system_prompt_block"],
+            "contexts": result["contexts"],
         }
 
     async def api_save_config(self):
@@ -430,7 +602,7 @@ class RuleInjectorPlugin(Star):
         }
 
     async def api_save_thoughts(self):
-        """整体保存思维链列表（顺序与启用状态）。"""
+        """整体保存思维链列表，以及同一页的示例场景（原子写入）。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
@@ -460,11 +632,8 @@ class RuleInjectorPlugin(Star):
                     "ok": False,
                     "error": f"第 {index + 1} 条思维链内容超过 {MAX_CONTENT_CHARS} 字符",
                 }
-            example = item.get("example_thought")
-            example = (
-                example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
-                if isinstance(example, str)
-                else ""
+            example = self._clean_example(
+                item.get("example_thought"), MAX_EXAMPLE_THOUGHT_CHARS
             )
             keyword = self._clean_keyword(item.get("keyword"))
             if not keyword:
@@ -491,7 +660,21 @@ class RuleInjectorPlugin(Star):
                 }
             )
 
-        ok, err = self._write_thought_chains(cleaned)
+        example = None
+        if "thought_example" in payload:
+            raw_example = payload["thought_example"]
+            if not isinstance(raw_example, dict):
+                return {"ok": False, "error": "thought_example 必须是 JSON 对象"}
+            example = {
+                "user": self._clean_example(
+                    raw_example.get("user"), MAX_EXAMPLE_USER_CHARS
+                ),
+                "reply": self._clean_example(
+                    raw_example.get("reply"), MAX_EXAMPLE_REPLY_CHARS
+                ),
+            }
+
+        ok, err = self._write_thought_chains(cleaned, example)
         if not ok:
             return {"ok": False, "error": f"保存失败: {err}"}
 
@@ -590,9 +773,13 @@ class RuleInjectorPlugin(Star):
 
     # ---------------------------------------------------------------- 思维链
 
-    def _write_thought_chains(self, chains: list[dict]) -> tuple[bool, str]:
-        """写思维链列表到配置并持久化。"""
-        updates = {"thought_chains": chains}
+    def _write_thought_chains(
+        self, chains: list[dict], example: dict | None = None
+    ) -> tuple[bool, str]:
+        """写思维链列表到配置并持久化；example 非空时一并落盘。"""
+        updates: dict = {"thought_chains": chains}
+        if example is not None:
+            updates["thought_example"] = example
         try:
             self.config.save_config(updates)
         except Exception as exc:  # noqa: BLE001
@@ -613,11 +800,8 @@ class RuleInjectorPlugin(Star):
             return {"ok": False, "error": "content 必须是字符串"}
         if len(content) > MAX_CONTENT_CHARS:
             return {"ok": False, "error": f"内容超过 {MAX_CONTENT_CHARS} 字符"}
-        example = payload.get("example_thought")
-        example = (
-            example.strip()[:MAX_EXAMPLE_THOUGHT_CHARS]
-            if isinstance(example, str)
-            else ""
+        example = self._clean_example(
+            payload.get("example_thought"), MAX_EXAMPLE_THOUGHT_CHARS
         )
         keyword = self._clean_keyword(payload.get("keyword"))
         if not keyword:

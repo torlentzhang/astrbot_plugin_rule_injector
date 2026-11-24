@@ -59,6 +59,22 @@ export const sections = {
     counterEl: el("thought-counter"),
     addEl: el("add-thought"),
     saveEl: el("save-thoughts"),
+    example: {
+      user: el("example-user"),
+      reply: el("example-reply"),
+    },
+    // 「示例与预览」是 thoughts 的第二视图，数据与保存仍归 thoughts
+    exampleView: {
+      thoughtsEl: el("example-thoughts"),
+      previewBtn: el("preview-btn"),
+      saveEl: el("save-examples"),
+      dialog: el("preview-dialog"),
+      body: el("preview-body"),
+      source: el("preview-source"),
+      close: el("preview-close"),
+      done: el("preview-done"),
+      scenes: document.querySelectorAll('input[name="preview-scene"]'),
+    },
     api: {
       save: "thought",
       remove: "thought/delete",
@@ -78,8 +94,8 @@ export const sections = {
       keyword: el("t-keyword"),
       content: el("t-content"),
       chars: el("t-chars"),
-      example: el("t-example"),
-      exampleChars: el("t-example-chars"),
+      example: null,
+      exampleChars: null,
       done: el("t-done"),
       del: el("t-delete"),
       close: el("tdrawer-close"),
@@ -107,6 +123,7 @@ export const sections = {
 export const state = {
   limits: {},
   defaultThoughtRule: "",
+  thoughtExample: { user: "", reply: "" },
   dirty: false,
   editing: { rules: -1, thoughts: -1 },
   drag: { rules: -1, thoughts: -1 },

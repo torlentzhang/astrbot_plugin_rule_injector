@@ -37,6 +37,15 @@
           >
             自定义思维链
           </button>
+          <button
+            type="button"
+            class="tab"
+            role="tab"
+            data-tab="examples"
+            aria-selected="false"
+          >
+            示例与预览
+          </button>
         </nav>
 
         <div class="toolbar-actions" data-for="rules">
@@ -53,6 +62,10 @@
           <button id="save-thoughts" type="button" class="btn-primary">
             保存
           </button>
+        </div>
+
+        <div class="toolbar-actions" data-for="examples" hidden>
+          <button id="save-examples" type="button" class="btn-primary">保存</button>
         </div>
       </div>
 
@@ -73,19 +86,51 @@
       <!-- 思维链 -->
       <section class="tab-panel" data-panel="thoughts" role="tabpanel">
         <p class="footnote footnote-top">
-          只写「怎么想」，标签和格式由插件拼好，效果：
-        </p>
-
-        <pre class="snippet">&lt;关键词&gt;这是你的内心活动（你写的内容）&lt;/关键词&gt;</pre>
-
-        <p class="footnote footnote-top">
-          每条链还能填「示例念头」，用一句真实的内心话示范标签里写什么，模型会更稳地照着输出。留空时自动复用规则内容，不会发给用户。
+          点击任意一行编辑；每条链只写「怎么想」，标签和格式由插件拼好。保存后立即生效。
         </p>
 
         <div id="thought-list" class="rule-list"></div>
 
         <div class="list-actions">
           <span id="thought-counter" class="list-counter"></span>
+        </div>
+      </section>
+
+      <!-- 示例与预览 -->
+      <section class="tab-panel" data-panel="examples" role="tabpanel">
+        <p class="footnote footnote-top">
+          一处填写示例输入、回复与每段念头；预览按当前填写内容生成，不会改动已保存配置。
+        </p>
+
+        <div class="example-card">
+          <div class="example-card-head">
+            <h2 class="example-card-title">示例场景</h2>
+          </div>
+          <div class="example-fields">
+            <div class="field-col">
+              <label class="field-label" for="example-user">示例输入</label>
+              <input type="text" id="example-user" class="text-input" maxlength="500" placeholder="用户说的话，例如：没事叫叫你" />
+              <span class="field-hint">留空沿用内置示例「在吗」。</span>
+            </div>
+            <div class="field-col">
+              <label class="field-label" for="example-reply">示例回复</label>
+              <textarea id="example-reply" class="text-area text-area-short" maxlength="500" spellcheck="false" placeholder="角色最终说的话，例如：你是有多闲。说吧，干嘛。"></textarea>
+              <span class="field-hint">留空沿用内置示例「嗯？怎么了」。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-head">
+            <h2 class="example-card-title">各段示例念头</h2>
+            <span class="example-card-hint">按启用的思维链顺序排列</span>
+          </div>
+          <div id="example-thoughts" class="example-thoughts"></div>
+          <span class="field-hint">每段留空时复用该链的规则内容。只用于注入示例，不会发给用户。</span>
+        </div>
+
+        <div class="preview-actions">
+          <button id="preview-btn" type="button" class="btn-secondary">预览最终提示词</button>
         </div>
       </section>
     </main>
@@ -159,14 +204,6 @@
           <textarea id="t-content" class="text-area" spellcheck="false" placeholder="告诉模型怎么用这个标记写内心话"></textarea>
         </div>
 
-        <div class="field-col">
-          <div class="field-head">
-            <span class="field-label">示例念头（可选）</span>
-            <span class="chars" id="t-example-chars">0 字</span>
-          </div>
-          <textarea id="t-example" class="text-area text-area-short" maxlength="500" spellcheck="false" placeholder="写一句这条思维链的真实念头，例如：他突然找我，我有点意外。"></textarea>
-          <span class="field-hint">给模型示范「标签里放的是具体念头，不是规则文字」。留空则自动复用上面的规则内容。只用于注入示例，不会发给用户，也不写进会话历史。</span>
-        </div>
       </div>
 
       <footer class="drawer-foot">
@@ -185,6 +222,25 @@
         </div>
       </div>
     </div>
+
+    <!-- 提示词预览 -->
+    <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-title">
+      <header class="preview-head">
+        <h2 id="preview-title">提示词预览</h2>
+        <button type="button" class="drawer-close" id="preview-close" aria-label="关闭">×</button>
+      </header>
+      <div class="preview-scene">
+        <span class="field-label">场景</span>
+        <label class="radio-label"><input type="radio" name="preview-scene" value="group" checked /> 群聊</label>
+        <label class="radio-label"><input type="radio" name="preview-scene" value="private" /> 私聊</label>
+        <span class="field-hint">场景只影响「行为规则」的筛选；少样本两场景相同。</span>
+      </div>
+      <div id="preview-body" class="preview-body"></div>
+      <footer class="preview-foot">
+        <span id="preview-source" class="preview-source"></span>
+        <button type="button" class="btn-primary" id="preview-done">关闭</button>
+      </footer>
+    </dialog>
 
     <script type="module" src="./app.js"></script>
   </body>
