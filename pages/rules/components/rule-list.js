@@ -1,7 +1,7 @@
 /** 列表渲染与拖动排序。 */
 
-import { sections, state, maxOf } from "./config.js";
-import { preview } from "./utils.js";
+import { sections, state, maxOf } from "../utils/model.js";
+import { preview } from "../utils/dom.js";
 
 /** 渲染某个列表。key 为 "rules" 或 "thoughts"。 */
 export function renderList(key) {

@@ -3,7 +3,7 @@
  * 渲染、拖动、抽屉、保存都只认这份配置，不认具体是哪个列表。
  */
 
-import { newId, sizeNode } from "./utils.js";
+import { newId, sizeNode } from "./dom.js";
 
 const SCOPE_LABEL = { group: "仅群聊", private: "仅私聊", all: "通用" };
 

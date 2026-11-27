@@ -3,10 +3,10 @@
  * 数据仍归属 sections.thoughts，这里只渲染输入框并消费预览接口。
  */
 
-import { sections, state } from "./config.js";
-import { post } from "./bridge.js";
-import { preview as summary } from "./utils.js";
-import { readExample } from "./drawer.js";
+import { sections, state } from "../utils/model.js";
+import { post } from "../utils/bridge.js";
+import { preview as summary } from "../utils/dom.js";
+import { readExample } from "./rule-drawer.js";
 
 function status(text, kind) {
   document.dispatchEvent(

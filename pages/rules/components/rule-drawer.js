@@ -1,7 +1,7 @@
 /** 抽屉的打开、关闭与字段同步。 */
 
-import { sections, state, maxOf } from "./config.js";
-import { renderList } from "./list.js";
+import { sections, state, maxOf } from "../utils/model.js";
+import { renderList } from "./rule-list.js";
 
 /** 同步抽屉里的字数统计。 */
 export function syncChars(key) {

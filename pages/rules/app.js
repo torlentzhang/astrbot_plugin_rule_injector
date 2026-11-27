@@ -1,29 +1,26 @@
 /**
  * 入口：装配各模块、绑定事件、启动加载。
- * 具体逻辑分散在 js/ 下，这里只做编排。
+ * 具体逻辑分散在 components/ 与 utils/ 下，这里只做编排。
  */
 
-import { bridge, get, setProfile, getProfile } from "./js/bridge.js";
-import { sections, state } from "./js/config.js";
-import { renderList } from "./js/list.js";
+import { bridge, get, getProfile } from "./utils/bridge.js";
+import { sections, state } from "./utils/model.js";
+import { renderList } from "./components/rule-list.js";
 import {
   addItem,
   closeDrawer,
   openDrawer,
   syncChars,
   syncExample,
-} from "./js/drawer.js";
-import { deleteItem, saveAll, saveItem } from "./js/api.js";
-import { initTabs } from "./js/tabs.js";
-import { initExamples, renderExampleThoughts } from "./js/examples.js";
+} from "./components/rule-drawer.js";
+import { deleteItem, saveAll, saveItem } from "./utils/api.js";
+import { initTabs } from "./components/tabs.js";
+import { initExamples, renderExampleThoughts } from "./components/thought-editor.js";
+import { askConfirm } from "./components/confirm-dialog.js";
+import { initProfileSelector, loadProfiles } from "./components/profile-selector.js";
 
 const els = {
   status: document.getElementById("status"),
-  confirmOverlay: document.getElementById("confirm-overlay"),
-  confirmText: document.getElementById("confirm-text"),
-  confirmOk: document.getElementById("confirm-ok"),
-  confirmCancel: document.getElementById("confirm-cancel"),
-  profileSelect: document.getElementById("profile-select"),
 };
 
 /* ---------------------------------------------------------------- 状态提示 */
@@ -41,38 +38,6 @@ document.addEventListener("list:dirty", () => {
   state.dirty = true;
   setStatus("有未保存的更改", "");
 });
-
-/* ---------------------------------------------------------------- 确认框 */
-
-function askConfirm(message, okLabel = "删除") {
-  return new Promise((resolve) => {
-    els.confirmText.textContent = message;
-    els.confirmOk.textContent = okLabel;
-    els.confirmOverlay.hidden = false;
-
-    const cleanup = (result) => {
-      els.confirmOverlay.hidden = true;
-      els.confirmOk.removeEventListener("click", onOk);
-      els.confirmCancel.removeEventListener("click", onCancel);
-      els.confirmOverlay.removeEventListener("click", onOverlay);
-      document.removeEventListener("keydown", onKey);
-      resolve(result);
-    };
-    const onOk = () => cleanup(true);
-    const onCancel = () => cleanup(false);
-    const onOverlay = (e) => {
-      if (e.target === els.confirmOverlay) cleanup(false);
-    };
-    const onKey = (e) => {
-      if (e.key === "Escape") cleanup(false);
-    };
-
-    els.confirmOk.addEventListener("click", onOk);
-    els.confirmCancel.addEventListener("click", onCancel);
-    els.confirmOverlay.addEventListener("click", onOverlay);
-    document.addEventListener("keydown", onKey);
-  });
-}
 
 /* ---------------------------------------------------------------- 装配 */
 
@@ -117,59 +82,7 @@ document.addEventListener("list:open", (e) => {
 
 initTabs(() => setStatus(""));
 initExamples(saveAll);
-
-/* ---------------------------------------------------------------- 档案 */
-
-/** 拉取档案列表并填充下拉框，默认选中第一个。 */
-async function loadProfiles() {
-  const data = await get("profiles");
-  const list = Array.isArray(data.profiles) ? data.profiles : [];
-  els.profileSelect.innerHTML = "";
-
-  list.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = item.key;
-    option.textContent = item.is_default
-      ? `${item.name}（默认档案）`
-      : item.name;
-    els.profileSelect.appendChild(option);
-  });
-
-  if (!list.length) {
-    const option = document.createElement("option");
-    option.textContent = "没有可用档案";
-    option.disabled = true;
-    els.profileSelect.appendChild(option);
-    return false;
-  }
-
-  const initial = list[0].key;
-  els.profileSelect.value = initial;
-  setProfile(initial);
-  return true;
-}
-
-/** 切换档案：先确认丢弃未保存的草稿，再加载新档案的配置。 */
-async function switchProfile(next) {
-  if (next === getProfile()) return;
-  if (state.dirty) {
-    const ok = await askConfirm(
-      "切换档案会丢弃当前未保存的更改，确认切换吗？",
-      "切换",
-    );
-    if (!ok) {
-      els.profileSelect.value = getProfile();
-      return;
-    }
-  }
-  setProfile(next);
-  state.dirty = false;
-  await load();
-}
-
-els.profileSelect.addEventListener("change", (e) => {
-  switchProfile(e.target.value);
-});
+initProfileSelector(load);
 
 /* ---------------------------------------------------------------- 启动 */
 

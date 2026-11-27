@@ -1,9 +1,9 @@
 /** 单条保存、删除，以及整体保存（顺序 + 启用状态）。 */
 
-import { sections, state } from "./config.js";
+import { sections, state } from "./model.js";
 import { post } from "./bridge.js";
-import { renderList } from "./list.js";
-import { closeDrawer, readDrawer, readExample } from "./drawer.js";
+import { renderList } from "../components/rule-list.js";
+import { closeDrawer, readDrawer, readExample } from "../components/rule-drawer.js";
 
 function status(text, kind) {
   document.dispatchEvent(
