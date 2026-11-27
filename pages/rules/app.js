@@ -118,5 +118,5 @@ await bridge.ready();
 if (await loadProfiles()) {
   await load();
 } else {
-  setStatus("没有可用档案", "err");
+  setStatus("没有可用配置文件", "err");
 }

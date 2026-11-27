@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""配置档案与配置桶的读写、旧数据迁移以及配置规整。
+"""配置文件与配置桶的读写、旧数据迁移以及配置规整。
 
 这里的每个方法都是插件实例的 mixin 方法：``self.config`` / ``self.context``
 仍然是插件实例上的属性，因此调用方无需感知方法来自哪个模块。
@@ -28,25 +28,25 @@ from .constants import (
 
 
 class StoreMixin:
-    """档案解析、配置桶读写与配置规整的 mixin。"""
+    """配置文件解析、配置桶读写与配置规整的 mixin。"""
 
-    # ---------------------------------------------------------------- 档案
+    # ---------------------------------------------------------------- 配置文件
 
     @staticmethod
     def _key_of_path(path: object) -> str:
-        """配置路径转档案 key：取文件名，空路径兜底为默认档案。"""
+        """配置路径转配置文件 key：取文件名，空路径兜底为默认配置文件。"""
         text = str(path or "").strip()
         return os.path.basename(text) or DEFAULT_PROFILE_KEY
 
     def _profile_list(self) -> list[dict]:
-        """当前配置档案列表，供前端下拉选择。"""
+        """当前配置文件列表，供前端下拉选择。"""
         profiles: list[dict] = []
         mgr = getattr(self.context, "astrbot_config_mgr", None)
         if mgr is not None:
             try:
                 infos = mgr.get_conf_list()
             except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[{PLUGIN_NAME}] 读取档案列表失败: {exc}")
+                logger.warning(f"[{PLUGIN_NAME}] 读取配置文件列表失败: {exc}")
                 infos = []
             for info in infos:
                 if not isinstance(info, dict):
@@ -78,7 +78,7 @@ class StoreMixin:
         return unique
 
     def _active_profile_key(self) -> str:
-        """当前被会话绑定的档案；没有绑定时用默认档案。仅用于旧数据迁移。"""
+        """当前被会话绑定的配置文件；没有绑定时用默认配置文件。仅用于旧数据迁移。"""
         mgr = getattr(self.context, "astrbot_config_mgr", None)
         if mgr is not None:
             ucr = getattr(mgr, "ucr", None)
@@ -94,7 +94,7 @@ class StoreMixin:
         )
 
     def _profile_key_of(self, event: AstrMessageEvent) -> str:
-        """按当前会话解析档案 key；注入与剥离共用这一处口径。"""
+        """按当前会话解析配置文件 key；注入与剥离共用这一处口径。"""
         umo = getattr(event, "unified_msg_origin", "") or ""
         conf = self.context.get_config(umo or None)
         return self._key_of_path(getattr(conf, "config_path", ""))
@@ -108,7 +108,7 @@ class StoreMixin:
         return bucket if isinstance(bucket, dict) else {}
 
     def _migrate_legacy(self) -> None:
-        """把旧版顶层配置一次性迁到当前在用的档案桶。"""
+        """把旧版顶层配置一次性迁到当前在用的配置文件桶。"""
         if self.config.get(MIGRATED_KEY) is True:
             return
 
@@ -125,7 +125,7 @@ class StoreMixin:
             for key, value in legacy.items():
                 bucket[key] = value
             profiles[target] = bucket
-            logger.info(f"[{PLUGIN_NAME}] 旧配置已迁移到档案 {target}")
+            logger.info(f"[{PLUGIN_NAME}] 旧配置已迁移到配置文件 {target}")
 
         try:
             self.config.save_config({"profiles": profiles, MIGRATED_KEY: True})
@@ -136,7 +136,7 @@ class StoreMixin:
         self.config[MIGRATED_KEY] = True
 
     def _write_bucket(self, profile_key: str, updates: dict) -> tuple[bool, str]:
-        """写入指定档案桶并持久化。"""
+        """写入指定配置文件桶并持久化。"""
         profiles = dict(self._all_profiles())
         bucket = dict(profiles.get(profile_key) or {})
         for key, value in updates.items():
@@ -152,17 +152,17 @@ class StoreMixin:
 
     @staticmethod
     def _profile_from_query() -> str | None:
-        """GET 请求的档案 key；未传时返回 None。"""
+        """GET 请求的配置文件 key；未传时返回 None。"""
         value = web_request.query.get("profile")
         return str(value).strip() if value else None
 
     def _resolve_profile(self, raw: object) -> tuple[str | None, str]:
-        """校验档案 key 是否属于当前档案列表。"""
+        """校验配置文件 key 是否属于当前配置文件列表。"""
         key = str(raw or "").strip()
         if not key:
             return None, "缺少 profile"
         if key not in {p["key"] for p in self._profile_list()}:
-            return None, "profile 不是有效的配置档案"
+            return None, "profile 不是有效的配置文件"
         return key, ""
 
     # ---------------------------------------------------------------- 内部
@@ -204,7 +204,7 @@ class StoreMixin:
         return rules[:MAX_RULES]
 
     def _load_rules(self, profile_key: str) -> list[dict]:
-        """读指定档案的规则列表。"""
+        """读指定配置文件的规则列表。"""
         return self._normalize_rules(self._bucket(profile_key).get("rules"))
 
     @staticmethod
@@ -213,7 +213,7 @@ class StoreMixin:
         return "group" if StoreMixin._is_group(event) else "private"
 
     def _snapshot(self, profile_key: str) -> dict:
-        """指定档案已保存配置的快照，供注入与预览共用。"""
+        """指定配置文件已保存配置的快照，供注入与预览共用。"""
         bucket = self._bucket(profile_key)
         return {
             "rules": self._normalize_rules(bucket.get("rules")),
@@ -278,13 +278,13 @@ class StoreMixin:
     # ---------------------------------------------------------------- 单条操作
 
     def _write_rules(self, profile_key: str, rules: list[dict]) -> tuple[bool, str]:
-        """写规则列表到指定档案桶并持久化。"""
+        """写规则列表到指定配置文件桶并持久化。"""
         return self._write_bucket(profile_key, {"rules": rules})
 
     def _write_thought_chains(
         self, profile_key: str, chains: list[dict], example: dict | None = None
     ) -> tuple[bool, str]:
-        """写思维链列表到指定档案桶并持久化；example 非空时一并落盘。"""
+        """写思维链列表到指定配置文件桶并持久化；example 非空时一并落盘。"""
         updates: dict = {"thought_chains": chains}
         if example is not None:
             updates["thought_example"] = example

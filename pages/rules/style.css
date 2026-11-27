@@ -48,10 +48,6 @@ body {
   max-width: 220px; cursor: pointer;
 }
 .profile-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.profile-hint {
-  margin: -8px 0 18px; font-size: 12px; color: var(--muted); line-height: 1.6;
-}
-
 .btn-primary {
   border: none; border-radius: 8px; padding: 9px 22px;
   background: var(--accent); color: #fff; font-size: 14px; font-weight: 500;

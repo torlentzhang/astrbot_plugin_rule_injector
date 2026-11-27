@@ -1,7 +1,7 @@
 name: astrbot_plugin_rule_injector
 display_name: 规则注入器
-short_desc: 按配置档案隔离规则与思维链，按场景注入 system prompt，带独立 Web 配置页
-desc: 按 AstrBot 配置档案隔离规则：每个档案有独立的行为规则与思维链，会话绑定哪个档案就注入哪套规则。规则可按群聊/私聊区分、单独开关、自由排序，保存后无需重启。另提供自定义思维链：角色回复前先写内心活动，聊天窗口只显示正文，思考内容留在会话里供下一轮参考。附带独立 Web 配置页，顶部切换档案，列表 + 侧滑抽屉编辑。
+short_desc: 按配置文件隔离规则与思维链，按场景注入 system prompt，带独立 Web 配置页
+desc: 按 AstrBot 配置文件隔离规则：每个配置文件有独立的行为规则与思维链，会话绑定哪个配置文件就注入哪套规则。规则可按群聊/私聊区分、单独开关、自由排序，保存后无需重启。另提供自定义思维链：角色回复前先写内心活动，聊天窗口只显示正文，思考内容留在会话里供下一轮参考。附带独立 Web 配置页，顶部切换配置文件，列表 + 侧滑抽屉编辑。
 version: 0.4.0
 author: torlent
 repo: "https://github.com/torlentzhang/astrbot_plugin_rule_injector"

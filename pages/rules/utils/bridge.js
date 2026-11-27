@@ -2,7 +2,7 @@
 
 export const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
 
-/** 当前档案 key，由入口加载档案列表后写入。 */
+/** 当前配置文件 key，由入口加载配置文件列表后写入。 */
 let currentProfile = "";
 
 export function setProfile(key) {

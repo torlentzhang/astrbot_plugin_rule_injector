@@ -28,11 +28,11 @@ class ApiHandlersMixin:
     # ---------------------------------------------------------------- Web API
 
     async def api_get_profiles(self):
-        """列出配置档案，供前端切换。"""
+        """列出配置文件，供前端切换。"""
         return {"ok": True, "profiles": self._profile_list()}
 
     async def api_get_config(self):
-        """读取指定档案的配置。"""
+        """读取指定配置文件的配置。"""
         profile_key = self._profile_from_query()
         if not profile_key:
             return {"ok": False, "error": "缺少 profile 参数"}
@@ -61,7 +61,7 @@ class ApiHandlersMixin:
         }
 
     async def api_preview(self):
-        """预览指定档案实际注入的两部分；只读，不改变已保存的配置。
+        """预览指定配置文件实际注入的两部分；只读，不改变已保存的配置。
 
         前端可传入未保存的草稿，预览按草稿渲染，source 标明内容来源。
         """
@@ -106,7 +106,7 @@ class ApiHandlersMixin:
         }
 
     async def api_save_config(self):
-        """保存指定档案的规则配置，立即生效。"""
+        """保存指定配置文件的规则配置，立即生效。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
@@ -166,7 +166,7 @@ class ApiHandlersMixin:
 
         total = sum(len(r["content"]) for r in cleaned)
         logger.info(
-            f"[{PLUGIN_NAME}] 配置已保存（档案 {key}，{len(cleaned)} 条规则，"
+            f"[{PLUGIN_NAME}] 配置已保存（配置文件 {key}，{len(cleaned)} 条规则，"
             f"共 {total} 字符）"
         )
         return {
@@ -178,7 +178,7 @@ class ApiHandlersMixin:
         }
 
     async def api_save_thoughts(self):
-        """整体保存指定档案的思维链列表及示例场景（原子写入）。"""
+        """整体保存指定配置文件的思维链列表及示例场景（原子写入）。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
@@ -259,7 +259,7 @@ class ApiHandlersMixin:
             return {"ok": False, "error": f"保存失败: {err}"}
 
         logger.info(
-            f"[{PLUGIN_NAME}] 思维链已保存（档案 {key}，{len(cleaned)} 条）"
+            f"[{PLUGIN_NAME}] 思维链已保存（配置文件 {key}，{len(cleaned)} 条）"
         )
         return {
             "ok": True,
@@ -322,7 +322,7 @@ class ApiHandlersMixin:
         if not ok:
             return {"ok": False, "error": f"保存失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已保存规则「{name}」（档案 {key}）")
+        logger.info(f"[{PLUGIN_NAME}] 已保存规则「{name}」（配置文件 {key}）")
         return {"ok": True, "profile": key, "id": rule_id, "rules": rules}
 
     async def api_delete_rule(self):
@@ -349,7 +349,7 @@ class ApiHandlersMixin:
         if not ok:
             return {"ok": False, "error": f"删除失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已删除规则 {rule_id}（档案 {key}）")
+        logger.info(f"[{PLUGIN_NAME}] 已删除规则 {rule_id}（配置文件 {key}）")
         return {"ok": True, "profile": key, "rules": remaining}
 
     # ---------------------------------------------------------------- 思维链
@@ -420,7 +420,7 @@ class ApiHandlersMixin:
             return {"ok": False, "error": f"保存失败: {err}"}
 
         logger.info(
-            f"[{PLUGIN_NAME}] 已保存思维链「{name}」（档案 {key}，关键词 {keyword}）"
+            f"[{PLUGIN_NAME}] 已保存思维链「{name}」（配置文件 {key}，关键词 {keyword}）"
         )
         return {"ok": True, "profile": key, "id": chain_id, "thought_chains": chains}
 
@@ -448,5 +448,5 @@ class ApiHandlersMixin:
         if not ok:
             return {"ok": False, "error": f"删除失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已删除思维链 {chain_id}（档案 {key}）")
+        logger.info(f"[{PLUGIN_NAME}] 已删除思维链 {chain_id}（配置文件 {key}）")
         return {"ok": True, "profile": key, "thought_chains": remaining}

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""按 AstrBot 配置档案注入行为约束规则与思维链。
+"""按 AstrBot 配置文件注入行为约束规则与思维链。
 
-每个配置档案（cmd_config.json 或 abconf_<uuid>.json）拥有独立的一套规则、
-思维链和示例场景，存于插件配置的 profiles 字典里，以档案文件名做 key。
-on_llm_request 阶段按当前会话绑定的档案取桶，注入对应规则；未绑定的会话
-走默认档案（cmd_config.json）。档案之间没有回退：某档案没配规则就不注入。
+每个配置文件（cmd_config.json 或 abconf_<uuid>.json）拥有独立的一套规则、
+思维链和示例场景，存于插件配置的 profiles 字典里，以配置文件文件名做 key。
+on_llm_request 阶段按当前会话绑定的配置文件取桶，注入对应规则；未绑定的会话
+走默认配置文件（cmd_config.json）。配置文件之间没有回退：某配置文件没配规则就不注入。
 
 规则数组结构：
     [{"id": str, "name": str, "enabled": bool, "scope": "group|private|all", "content": str}]
@@ -22,7 +22,7 @@ on_llm_request 阶段按当前会话绑定的档案取桶，注入对应规则�
 前端草稿渲染，不改动已保存配置。
 
 从旧版升级时，顶层 rules / thought_chains / thought_example 一次性迁移到
-当前实际在用的档案桶，迁移标记落盘后不再重复。
+当前实际在用的配置文件桶，迁移标记落盘后不再重复。
 """
 
 from astrbot.api import logger
@@ -42,7 +42,7 @@ from .core.strip import StripMixin
 @register(
     PLUGIN_NAME,
     "local",
-    "按配置档案注入行为约束规则与思维链",
+    "按配置文件注入行为约束规则与思维链",
     "0.4.0",
 )
 class RuleInjectorPlugin(
@@ -55,19 +55,19 @@ class RuleInjectorPlugin(
             f"/{PLUGIN_NAME}/profiles",
             self.api_get_profiles,
             ["GET"],
-            "读取配置档案列表",
+            "读取配置文件列表",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/config",
             self.api_get_config,
             ["GET"],
-            "读取指定档案的规则配置",
+            "读取指定配置文件的规则配置",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/config",
             self.api_save_config,
             ["POST"],
-            "保存指定档案的规则配置",
+            "保存指定配置文件的规则配置",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/rule",
@@ -114,7 +114,7 @@ class RuleInjectorPlugin(
     async def inject_rules(
         self, event: AstrMessageEvent, request: ProviderRequest
     ) -> None:
-        """在 LLM 请求前按当前会话的档案注入规则与少样本示例。"""
+        """在 LLM 请求前按当前会话的配置文件注入规则与少样本示例。"""
         profile_key = self._profile_key_of(event)
         scene_key = self._scene_of(event)
         result = self._assemble(self._snapshot(profile_key), scene_key)
@@ -133,7 +133,7 @@ class RuleInjectorPlugin(
 
         scene = "群聊" if scene_key == "group" else "私聊"
         logger.info(
-            f"[{PLUGIN_NAME}] 已注入规则（档案 {profile_key}，{scene}，"
+            f"[{PLUGIN_NAME}] 已注入规则（配置文件 {profile_key}，{scene}，"
             f"{len(block)} 字符，少样本示例 {len(fewshot)} 条）"
         )
 
@@ -185,7 +185,7 @@ class RuleInjectorPlugin(
 
         scene = "群聊" if self._is_group(event) else "私聊"
         logger.info(
-            f"[{PLUGIN_NAME}] 已剥离思考区（档案 {profile_key}，{scene}，"
+            f"[{PLUGIN_NAME}] 已剥离思考区（配置文件 {profile_key}，{scene}，"
             f"方式：{'/'.join(sorted(modes))}）"
         )
 
