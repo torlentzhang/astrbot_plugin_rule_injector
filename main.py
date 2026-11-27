@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""把行为约束类规则按场景注入 system prompt。
+"""按 AstrBot 配置档案注入行为约束规则与思维链。
 
-on_llm_request 阶段把规则直接追加到 system_prompt，按场景区分。
+每个配置档案（cmd_config.json 或 abconf_<uuid>.json）拥有独立的一套规则、
+思维链和示例场景，存于插件配置的 profiles 字典里，以档案文件名做 key。
+on_llm_request 阶段按当前会话绑定的档案取桶，注入对应规则；未绑定的会话
+走默认档案（cmd_config.json）。档案之间没有回退：某档案没配规则就不注入。
 
-规则存于配置文件的 rules 数组：
+规则数组结构：
     [{"id": str, "name": str, "enabled": bool, "scope": "group|private|all", "content": str}]
 
 思维链存于 thought_chains 数组，每条自带关键词，关键词决定输出时的开标签：
@@ -11,16 +14,18 @@ on_llm_request 阶段把规则直接追加到 system_prompt，按场景区分。
       "example_thought": str}]
 输出格式要求每段用自闭合标签起头（<关键词/>），正文用 <回复/> 起头；发送前只把
 <回复/> 之后的内容发给用户，思考区保留在会话历史里，模型下一轮仍看得到自己想过什么。
-example_thought 是可选的示例念头，用来每轮动态拼一条少样本示例注入上下文，
-让模型看到「上一次就是这么输出的」；留空时回退复用 content。
 
 全局的 thought_example 存一问一答的示例场景（user / reply），与每段念头一起
-拼成少样本：user / reply 留空时回退到内置的「在吗 / 嗯？怎么了」，保持兼容。
+拼成少样本；user / reply 留空时回退到内置的「在吗 / 嗯？怎么了」。
 
 规则块与少样本由 _assemble 统一拼装；实际注入与 Web 预览共用它，预览按
 前端草稿渲染，不改动已保存配置。
+
+从旧版升级时，顶层 rules / thought_chains / thought_example 一次性迁移到
+当前实际在用的档案桶，迁移标记落盘后不再重复。
 """
 
+import os
 import re
 import uuid
 
@@ -43,6 +48,10 @@ MAX_EXAMPLE_USER_CHARS = 500
 MAX_EXAMPLE_REPLY_CHARS = 500
 SCOPES = ("group", "private", "all")
 
+# 老配置迁移完成的标记，避免每次启动都重迁
+MIGRATED_KEY = "_profiles_v1"
+DEFAULT_PROFILE_KEY = "cmd_config.json"
+
 # 用户没配置 thought_example 时的回退示例，与改前行为一致
 DEFAULT_EXAMPLE_USER = "在吗"
 DEFAULT_EXAMPLE_REPLY = "嗯？怎么了"
@@ -58,24 +67,30 @@ DEFAULT_THOUGHT_RULE = (
 @register(
     PLUGIN_NAME,
     "local",
-    "把行为约束类规则按场景注入 system prompt",
-    "0.3.0",
+    "按配置档案注入行为约束规则与思维链",
+    "0.4.0",
 )
 class RuleInjectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         context.register_web_api(
+            f"/{PLUGIN_NAME}/profiles",
+            self.api_get_profiles,
+            ["GET"],
+            "读取配置档案列表",
+        )
+        context.register_web_api(
             f"/{PLUGIN_NAME}/config",
             self.api_get_config,
             ["GET"],
-            "读取规则配置",
+            "读取指定档案的规则配置",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/config",
             self.api_save_config,
             ["POST"],
-            "保存规则配置",
+            "保存指定档案的规则配置",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/rule",
@@ -113,7 +128,143 @@ class RuleInjectorPlugin(Star):
             ["POST"],
             "预览规则与少样本示例的拼装结果",
         )
+        self._migrate_legacy()
         logger.info(f"[{PLUGIN_NAME}] 已加载")
+
+    # ---------------------------------------------------------------- 档案
+
+    @staticmethod
+    def _key_of_path(path: object) -> str:
+        """配置路径转档案 key：取文件名，空路径兜底为默认档案。"""
+        text = str(path or "").strip()
+        return os.path.basename(text) or DEFAULT_PROFILE_KEY
+
+    def _profile_list(self) -> list[dict]:
+        """当前配置档案列表，供前端下拉选择。"""
+        profiles: list[dict] = []
+        mgr = getattr(self.context, "astrbot_config_mgr", None)
+        if mgr is not None:
+            try:
+                infos = mgr.get_conf_list()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 读取档案列表失败: {exc}")
+                infos = []
+            for info in infos:
+                if not isinstance(info, dict):
+                    continue
+                profiles.append(
+                    {
+                        "key": self._key_of_path(info.get("path")),
+                        "name": str(info.get("name") or "默认配置"),
+                        "is_default": info.get("id") == "default",
+                    }
+                )
+        if not profiles:
+            conf = self.context.get_config()
+            profiles.append(
+                {
+                    "key": self._key_of_path(getattr(conf, "config_path", "")),
+                    "name": "默认配置",
+                    "is_default": True,
+                }
+            )
+        # 按 key 去重，保留首次出现顺序
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for item in profiles:
+            if item["key"] in seen:
+                continue
+            seen.add(item["key"])
+            unique.append(item)
+        return unique
+
+    def _active_profile_key(self) -> str:
+        """当前被会话绑定的档案；没有绑定时用默认档案。仅用于旧数据迁移。"""
+        mgr = getattr(self.context, "astrbot_config_mgr", None)
+        if mgr is not None:
+            ucr = getattr(mgr, "ucr", None)
+            routes = getattr(ucr, "umop_to_conf_id", None) or {}
+            conf_id = next(iter(routes.values()), None)
+            if conf_id:
+                confs = getattr(mgr, "confs", None) or {}
+                conf = confs.get(conf_id)
+                if conf is not None:
+                    return self._key_of_path(getattr(conf, "config_path", ""))
+        return self._key_of_path(
+            getattr(self.context.get_config(), "config_path", "")
+        )
+
+    def _profile_key_of(self, event: AstrMessageEvent) -> str:
+        """按当前会话解析档案 key；注入与剥离共用这一处口径。"""
+        umo = getattr(event, "unified_msg_origin", "") or ""
+        conf = self.context.get_config(umo or None)
+        return self._key_of_path(getattr(conf, "config_path", ""))
+
+    def _all_profiles(self) -> dict:
+        raw = self.config.get("profiles")
+        return raw if isinstance(raw, dict) else {}
+
+    def _bucket(self, profile_key: str) -> dict:
+        bucket = self._all_profiles().get(profile_key)
+        return bucket if isinstance(bucket, dict) else {}
+
+    def _migrate_legacy(self) -> None:
+        """把旧版顶层配置一次性迁到当前在用的档案桶。"""
+        if self.config.get(MIGRATED_KEY) is True:
+            return
+
+        legacy: dict = {}
+        for key in ("rules", "thought_chains", "thought_example"):
+            value = self.config.get(key)
+            if value is not None:
+                legacy[key] = value
+
+        profiles = dict(self._all_profiles())
+        if any(legacy.values()):
+            target = self._active_profile_key()
+            bucket = dict(profiles.get(target) or {})
+            for key, value in legacy.items():
+                bucket[key] = value
+            profiles[target] = bucket
+            logger.info(f"[{PLUGIN_NAME}] 旧配置已迁移到档案 {target}")
+
+        try:
+            self.config.save_config({"profiles": profiles, MIGRATED_KEY: True})
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[{PLUGIN_NAME}] 配置迁移落盘失败: {exc}")
+            return
+        self.config["profiles"] = profiles
+        self.config[MIGRATED_KEY] = True
+
+    def _write_bucket(self, profile_key: str, updates: dict) -> tuple[bool, str]:
+        """写入指定档案桶并持久化。"""
+        profiles = dict(self._all_profiles())
+        bucket = dict(profiles.get(profile_key) or {})
+        for key, value in updates.items():
+            bucket[key] = value
+        profiles[profile_key] = bucket
+        try:
+            self.config.save_config({"profiles": profiles})
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[{PLUGIN_NAME}] 保存配置失败: {exc}")
+            return False, str(exc)
+        self.config["profiles"] = profiles
+        return True, ""
+
+    @staticmethod
+    def _profile_from_query() -> str | None:
+        """GET 请求的档案 key；未传时返回 None。"""
+        value = web_request.query.get("profile")
+        return str(value).strip() if value else None
+
+    def _resolve_profile(self, raw: object) -> tuple[str | None, str]:
+        """校验档案 key 是否属于当前档案列表。"""
+        key = str(raw or "").strip()
+        if not key:
+            return None, "缺少 profile"
+        if key not in {p["key"] for p in self._profile_list()}:
+            return None, "profile 不是有效的配置档案"
+        return key, ""
 
     # ---------------------------------------------------------------- 内部
 
@@ -153,21 +304,24 @@ class RuleInjectorPlugin(Star):
 
         return rules[:MAX_RULES]
 
-    def _load_rules(self) -> list[dict]:
-        """读规则列表。"""
-        return self._normalize_rules(self.config.get("rules"))
+    def _load_rules(self, profile_key: str) -> list[dict]:
+        """读指定档案的规则列表。"""
+        return self._normalize_rules(self._bucket(profile_key).get("rules"))
 
     @staticmethod
     def _scene_of(event: AstrMessageEvent) -> str:
         """把事件映射成场景标识，注入与预览共用这一处口径。"""
         return "group" if RuleInjectorPlugin._is_group(event) else "private"
 
-    def _snapshot(self) -> dict:
-        """当前已保存配置的快照，供注入与预览共用。"""
+    def _snapshot(self, profile_key: str) -> dict:
+        """指定档案已保存配置的快照，供注入与预览共用。"""
+        bucket = self._bucket(profile_key)
         return {
-            "rules": self._load_rules(),
-            "thought_chains": self._load_thought_chains(),
-            "thought_example": self._load_thought_example(),
+            "rules": self._normalize_rules(bucket.get("rules")),
+            "thought_chains": self._normalize_chains(bucket.get("thought_chains")),
+            "thought_example": self._normalize_thought_example(
+                bucket.get("thought_example")
+            ),
         }
 
     def _assemble(self, snapshot: dict, scene: str) -> dict:
@@ -239,7 +393,7 @@ class RuleInjectorPlugin(Star):
 
         block = "\n\n".join(blocks)
         if not block:
-            # 与原 inject_rules 的提前返回一致：无可注入内容时两部分都为空
+            # 无可注入内容时两部分都为空
             return {"system_prompt_block": "", "contexts": []}
 
         contexts: list[dict] = []
@@ -291,10 +445,6 @@ class RuleInjectorPlugin(Star):
 
         return chains[:MAX_THOUGHT_CHAINS]
 
-    def _load_thought_chains(self) -> list[dict]:
-        """读思维链列表。"""
-        return self._normalize_chains(self.config.get("thought_chains"))
-
     @staticmethod
     def _clean_keyword(raw: object) -> str:
         """规整关键词：去掉尖括号与空白，只留裸词。"""
@@ -317,10 +467,6 @@ class RuleInjectorPlugin(Star):
             "reply": self._clean_example(raw.get("reply"), MAX_EXAMPLE_REPLY_CHARS),
         }
 
-    def _load_thought_example(self) -> dict:
-        """读全局示例场景。"""
-        return self._normalize_thought_example(self.config.get("thought_example"))
-
     def _strip_thought_text(
         self, text: str, chains: list[dict]
     ) -> tuple[str, str | None]:
@@ -333,14 +479,12 @@ class RuleInjectorPlugin(Star):
         keywords = [c["keyword"] for c in chains]
 
         # 工具调用后的那一轮可能只输出 <回复/>正文，没有思考段。
-        # 这种孤立标记也要剥掉，否则 <回复/> 会原样发给用户。
         lone = re.match(r"\s*<\s*回复\s*/?\s*>", text, re.IGNORECASE)
         if lone:
             body = re.sub(r"^\s*<qq_message_id[^>]*>\s*", "", text[lone.end() :])
             return body.strip(), "reply_only"
 
-        # 按配置顺序定位标签；自闭合 <kw/> 与旧开标签 <kw> 都认，
-        # 首标签前只能有空白，避免误判普通消息
+        # 按配置顺序定位标签；自闭合 <kw/> 与旧开标签 <kw> 都认
         hits: list[tuple[int, int]] = []
         cursor = 0
         for kw in keywords:
@@ -399,9 +543,10 @@ class RuleInjectorPlugin(Star):
     async def inject_rules(
         self, event: AstrMessageEvent, request: ProviderRequest
     ) -> None:
-        """在 LLM 请求前注入规则与少样本示例。"""
+        """在 LLM 请求前按当前会话的档案注入规则与少样本示例。"""
+        profile_key = self._profile_key_of(event)
         scene_key = self._scene_of(event)
-        result = self._assemble(self._snapshot(), scene_key)
+        result = self._assemble(self._snapshot(profile_key), scene_key)
         block = result["system_prompt_block"]
         if not block:
             return
@@ -417,21 +562,24 @@ class RuleInjectorPlugin(Star):
 
         scene = "群聊" if scene_key == "group" else "私聊"
         logger.info(
-            f"[{PLUGIN_NAME}] 已注入规则（{scene}，{len(block)} 字符，"
-            f"少样本示例 {len(fewshot)} 条）"
+            f"[{PLUGIN_NAME}] 已注入规则（档案 {profile_key}，{scene}，"
+            f"{len(block)} 字符，少样本示例 {len(fewshot)} 条）"
         )
 
     # ---------------------------------------------------------------- 剥离
 
     @filter.on_decorating_result()
     async def strip_thought(self, event: AstrMessageEvent) -> None:
-        """发送前剥掉思考区，只把「回复：」之后的正文发出去。
+        """发送前剥掉思考区，只把正文发出去。
 
         思考区本身要留在会话历史里，模型下一轮才看得到格式先例。
         """
+        profile_key = self._profile_key_of(event)
         chains = [
             c
-            for c in self._load_thought_chains()
+            for c in self._normalize_chains(
+                self._bucket(profile_key).get("thought_chains")
+            )
             if c["enabled"] and c["content"].strip()
         ]
         if not chains:
@@ -466,17 +614,32 @@ class RuleInjectorPlugin(Star):
 
         scene = "群聊" if self._is_group(event) else "私聊"
         logger.info(
-            f"[{PLUGIN_NAME}] 已剥离思考区（{scene}，方式：{'/'.join(sorted(modes))}）"
+            f"[{PLUGIN_NAME}] 已剥离思考区（档案 {profile_key}，{scene}，"
+            f"方式：{'/'.join(sorted(modes))}）"
         )
 
     # ---------------------------------------------------------------- Web API
 
+    async def api_get_profiles(self):
+        """列出配置档案，供前端切换。"""
+        return {"ok": True, "profiles": self._profile_list()}
+
     async def api_get_config(self):
-        """读取当前配置。"""
+        """读取指定档案的配置。"""
+        profile_key = self._profile_from_query()
+        if not profile_key:
+            return {"ok": False, "error": "缺少 profile 参数"}
+        key, err = self._resolve_profile(profile_key)
+        if err:
+            return {"ok": False, "error": err}
+
+        snapshot = self._snapshot(key)
         return {
-            "rules": self._load_rules(),
-            "thought_chains": self._load_thought_chains(),
-            "thought_example": self._load_thought_example(),
+            "ok": True,
+            "profile": key,
+            "rules": snapshot["rules"],
+            "thought_chains": snapshot["thought_chains"],
+            "thought_example": snapshot["thought_example"],
             "limits": {
                 "max_rules": MAX_RULES,
                 "max_thought_chains": MAX_THOUGHT_CHAINS,
@@ -491,7 +654,7 @@ class RuleInjectorPlugin(Star):
         }
 
     async def api_preview(self):
-        """预览实际注入的两部分；只读，不改变已保存的配置。
+        """预览指定档案实际注入的两部分；只读，不改变已保存的配置。
 
         前端可传入未保存的草稿，预览按草稿渲染，source 标明内容来源。
         """
@@ -499,11 +662,15 @@ class RuleInjectorPlugin(Star):
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
 
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
+
         scene = payload.get("scene")
         if scene not in ("group", "private"):
             return {"ok": False, "error": "scene 必须是 group 或 private"}
 
-        snapshot = self._snapshot()
+        snapshot = self._snapshot(key)
         source = "saved"
         draft = payload.get("draft")
         if draft is not None:
@@ -524,6 +691,7 @@ class RuleInjectorPlugin(Star):
         result = self._assemble(snapshot, scene)
         return {
             "ok": True,
+            "profile": key,
             "scene": scene,
             "source": source,
             "system_prompt_block": result["system_prompt_block"],
@@ -531,10 +699,14 @@ class RuleInjectorPlugin(Star):
         }
 
     async def api_save_config(self):
-        """保存配置，立即生效。"""
+        """保存指定档案的规则配置，立即生效。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
 
         raw_rules = payload.get("rules")
         if not isinstance(raw_rules, list):
@@ -581,31 +753,32 @@ class RuleInjectorPlugin(Star):
                 }
             )
 
-        updates: dict = {"rules": cleaned}
-
-        try:
-            self.config.save_config(updates)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"[{PLUGIN_NAME}] 保存配置失败: {exc}")
-            return {"ok": False, "error": f"保存失败: {exc}"}
-
-        for key, value in updates.items():
-            self.config[key] = value
+        ok, err = self._write_bucket(key, {"rules": cleaned})
+        if not ok:
+            return {"ok": False, "error": f"保存失败: {err}"}
 
         total = sum(len(r["content"]) for r in cleaned)
-        logger.info(f"[{PLUGIN_NAME}] 配置已保存（{len(cleaned)} 条规则，共 {total} 字符）")
+        logger.info(
+            f"[{PLUGIN_NAME}] 配置已保存（档案 {key}，{len(cleaned)} 条规则，"
+            f"共 {total} 字符）"
+        )
         return {
             "ok": True,
+            "profile": key,
             "count": len(cleaned),
             "total_chars": total,
             "rules": cleaned,
         }
 
     async def api_save_thoughts(self):
-        """整体保存思维链列表，以及同一页的示例场景（原子写入）。"""
+        """整体保存指定档案的思维链列表及示例场景（原子写入）。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
 
         raw = payload.get("thought_chains")
         if not isinstance(raw, list):
@@ -660,12 +833,12 @@ class RuleInjectorPlugin(Star):
                 }
             )
 
-        example = None
+        updates: dict = {"thought_chains": cleaned}
         if "thought_example" in payload:
             raw_example = payload["thought_example"]
             if not isinstance(raw_example, dict):
                 return {"ok": False, "error": "thought_example 必须是 JSON 对象"}
-            example = {
+            updates["thought_example"] = {
                 "user": self._clean_example(
                     raw_example.get("user"), MAX_EXAMPLE_USER_CHARS
                 ),
@@ -674,32 +847,35 @@ class RuleInjectorPlugin(Star):
                 ),
             }
 
-        ok, err = self._write_thought_chains(cleaned, example)
+        ok, err = self._write_bucket(key, updates)
         if not ok:
             return {"ok": False, "error": f"保存失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 思维链已保存（{len(cleaned)} 条）")
-        return {"ok": True, "count": len(cleaned), "thought_chains": cleaned}
+        logger.info(
+            f"[{PLUGIN_NAME}] 思维链已保存（档案 {key}，{len(cleaned)} 条）"
+        )
+        return {
+            "ok": True,
+            "profile": key,
+            "count": len(cleaned),
+            "thought_chains": cleaned,
+        }
 
     # ---------------------------------------------------------------- 单条操作
 
-    def _write_rules(self, rules: list[dict]) -> tuple[bool, str]:
-        """写规则列表到配置并持久化。"""
-        updates = {"rules": rules}
-        try:
-            self.config.save_config(updates)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"[{PLUGIN_NAME}] 保存失败: {exc}")
-            return False, str(exc)
-        for key, value in updates.items():
-            self.config[key] = value
-        return True, ""
+    def _write_rules(self, profile_key: str, rules: list[dict]) -> tuple[bool, str]:
+        """写规则列表到指定档案桶并持久化。"""
+        return self._write_bucket(profile_key, {"rules": rules})
 
     async def api_save_rule(self):
         """保存单条规则（新增或更新）。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
 
         content = payload.get("content")
         if not isinstance(content, str):
@@ -711,7 +887,7 @@ class RuleInjectorPlugin(Star):
         if scope not in SCOPES:
             scope = "all"
 
-        rules = self._load_rules()
+        rules = self._load_rules(key)
         rule_id = str(payload.get("id") or "").strip()
 
         existing = None
@@ -739,61 +915,60 @@ class RuleInjectorPlugin(Star):
                 }
             )
 
-        ok, err = self._write_rules(rules)
+        ok, err = self._write_rules(key, rules)
         if not ok:
             return {"ok": False, "error": f"保存失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已保存规则「{name}」")
-        return {"ok": True, "id": rule_id, "rules": rules}
+        logger.info(f"[{PLUGIN_NAME}] 已保存规则「{name}」（档案 {key}）")
+        return {"ok": True, "profile": key, "id": rule_id, "rules": rules}
 
     async def api_delete_rule(self):
-        """删除单条规则。
-
-        幂等：id 不存在时也算删除成功。前端新建的规则可能在还没保存
-        内容时就被删掉，这时配置里根本没有它，不该报错。
-        """
+        """删除单条规则。幂等：id 不存在时也算删除成功。"""
         payload = await web_request.json(default={})
-        rule_id = str((payload or {}).get("id") or "").strip()
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
+
+        rule_id = str(payload.get("id") or "").strip()
         if not rule_id:
             return {"ok": False, "error": "缺少 id"}
 
-        rules = self._load_rules()
+        rules = self._load_rules(key)
         remaining = [r for r in rules if r["id"] != rule_id]
 
         if len(remaining) == len(rules):
-            # 本来就不在配置里，直接返回成功
-            return {"ok": True, "rules": rules}
+            return {"ok": True, "profile": key, "rules": rules}
 
-        ok, err = self._write_rules(remaining)
+        ok, err = self._write_rules(key, remaining)
         if not ok:
             return {"ok": False, "error": f"删除失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已删除规则 {rule_id}")
-        return {"ok": True, "rules": remaining}
+        logger.info(f"[{PLUGIN_NAME}] 已删除规则 {rule_id}（档案 {key}）")
+        return {"ok": True, "profile": key, "rules": remaining}
 
     # ---------------------------------------------------------------- 思维链
 
     def _write_thought_chains(
-        self, chains: list[dict], example: dict | None = None
+        self, profile_key: str, chains: list[dict], example: dict | None = None
     ) -> tuple[bool, str]:
-        """写思维链列表到配置并持久化；example 非空时一并落盘。"""
+        """写思维链列表到指定档案桶并持久化；example 非空时一并落盘。"""
         updates: dict = {"thought_chains": chains}
         if example is not None:
             updates["thought_example"] = example
-        try:
-            self.config.save_config(updates)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"[{PLUGIN_NAME}] 保存思维链失败: {exc}")
-            return False, str(exc)
-        for key, value in updates.items():
-            self.config[key] = value
-        return True, ""
+        return self._write_bucket(profile_key, updates)
 
     async def api_save_thought(self):
         """保存单条思维链（新增或更新）。"""
         payload = await web_request.json(default={})
         if not isinstance(payload, dict):
             return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
 
         content = payload.get("content")
         if not isinstance(content, str):
@@ -814,7 +989,7 @@ class RuleInjectorPlugin(Star):
 
         name = str(payload.get("name") or "").strip()[:MAX_NAME_CHARS] or keyword
 
-        chains = self._load_thought_chains()
+        chains = self._normalize_chains(self._bucket(key).get("thought_chains"))
         chain_id = str(payload.get("id") or "").strip()
 
         existing = None
@@ -846,32 +1021,41 @@ class RuleInjectorPlugin(Star):
                 }
             )
 
-        ok, err = self._write_thought_chains(chains)
+        ok, err = self._write_thought_chains(key, chains)
         if not ok:
             return {"ok": False, "error": f"保存失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已保存思维链「{name}」（关键词 {keyword}）")
-        return {"ok": True, "id": chain_id, "thought_chains": chains}
+        logger.info(
+            f"[{PLUGIN_NAME}] 已保存思维链「{name}」（档案 {key}，关键词 {keyword}）"
+        )
+        return {"ok": True, "profile": key, "id": chain_id, "thought_chains": chains}
 
     async def api_delete_thought(self):
         """删除单条思维链。幂等：id 不存在时也返回成功。"""
         payload = await web_request.json(default={})
-        chain_id = str((payload or {}).get("id") or "").strip()
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+        key, err = self._resolve_profile(payload.get("profile"))
+        if err:
+            return {"ok": False, "error": err}
+
+        chain_id = str(payload.get("id") or "").strip()
         if not chain_id:
             return {"ok": False, "error": "缺少 id"}
 
-        chains = self._load_thought_chains()
+        chains = self._normalize_chains(self._bucket(key).get("thought_chains"))
         remaining = [c for c in chains if c["id"] != chain_id]
 
         if len(remaining) == len(chains):
-            return {"ok": True, "thought_chains": chains}
+            return {"ok": True, "profile": key, "thought_chains": chains}
 
-        ok, err = self._write_thought_chains(remaining)
+        ok, err = self._write_thought_chains(key, remaining)
         if not ok:
             return {"ok": False, "error": f"删除失败: {err}"}
 
-        logger.info(f"[{PLUGIN_NAME}] 已删除思维链 {chain_id}")
-        return {"ok": True, "thought_chains": remaining}
+        logger.info(f"[{PLUGIN_NAME}] 已删除思维链 {chain_id}（档案 {key}）")
+        return {"ok": True, "profile": key, "thought_chains": remaining}
 
     async def terminate(self):
         """插件卸载时调用。"""

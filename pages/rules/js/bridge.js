@@ -2,6 +2,17 @@
 
 export const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
 
+/** 当前档案 key，由入口加载档案列表后写入。 */
+let currentProfile = "";
+
+export function setProfile(key) {
+  currentProfile = key || "";
+}
+
+export function getProfile() {
+  return currentProfile;
+}
+
 /** 剥掉桥接层可能包的 { data: ... } 外壳。 */
 export function unwrap(payload) {
   if (payload && typeof payload === "object" && "data" in payload) return payload.data;
@@ -9,8 +20,9 @@ export function unwrap(payload) {
 }
 
 /** 调接口并解包；data.ok === false 时抛出业务错误。 */
-export async function post(route, body) {
-  const data = unwrap(await bridge.apiPost(route, body)) || {};
+export async function post(route, body = {}) {
+  const payload = { ...body, profile: currentProfile };
+  const data = unwrap(await bridge.apiPost(route, payload)) || {};
   if (data.ok === false) throw new Error(data.error || "请求被拒绝");
   return data;
 }

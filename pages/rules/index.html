@@ -13,9 +13,18 @@
           <h1>规则注入器</h1>
         </div>
         <div class="header-actions">
+          <label class="profile-picker" for="profile-select">
+            <span class="profile-picker-label">配置档案</span>
+            <select id="profile-select" class="profile-select" aria-label="选择配置档案"></select>
+          </label>
           <span id="status" class="status" role="status"></span>
         </div>
       </header>
+
+      <p class="profile-hint">
+        每个配置档案有独立的规则与思维链。在 AstrBot「配置档案」页把群或好友绑定到某个档案后，
+        这里为该档案配的规则就会自动对它生效。
+      </p>
 
       <div class="toolbar">
         <nav class="tabs" role="tablist">

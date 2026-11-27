@@ -3,7 +3,7 @@
  * 具体逻辑分散在 js/ 下，这里只做编排。
  */
 
-import { bridge, get } from "./js/bridge.js";
+import { bridge, get, setProfile, getProfile } from "./js/bridge.js";
 import { sections, state } from "./js/config.js";
 import { renderList } from "./js/list.js";
 import {
@@ -23,6 +23,7 @@ const els = {
   confirmText: document.getElementById("confirm-text"),
   confirmOk: document.getElementById("confirm-ok"),
   confirmCancel: document.getElementById("confirm-cancel"),
+  profileSelect: document.getElementById("profile-select"),
 };
 
 /* ---------------------------------------------------------------- 状态提示 */
@@ -43,9 +44,10 @@ document.addEventListener("list:dirty", () => {
 
 /* ---------------------------------------------------------------- 确认框 */
 
-function askConfirm(message) {
+function askConfirm(message, okLabel = "删除") {
   return new Promise((resolve) => {
     els.confirmText.textContent = message;
+    els.confirmOk.textContent = okLabel;
     els.confirmOverlay.hidden = false;
 
     const cleanup = (result) => {
@@ -116,12 +118,65 @@ document.addEventListener("list:open", (e) => {
 initTabs(() => setStatus(""));
 initExamples(saveAll);
 
+/* ---------------------------------------------------------------- 档案 */
+
+/** 拉取档案列表并填充下拉框，默认选中第一个。 */
+async function loadProfiles() {
+  const data = await get("profiles");
+  const list = Array.isArray(data.profiles) ? data.profiles : [];
+  els.profileSelect.innerHTML = "";
+
+  list.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.key;
+    option.textContent = item.is_default
+      ? `${item.name}（默认档案）`
+      : item.name;
+    els.profileSelect.appendChild(option);
+  });
+
+  if (!list.length) {
+    const option = document.createElement("option");
+    option.textContent = "没有可用档案";
+    option.disabled = true;
+    els.profileSelect.appendChild(option);
+    return false;
+  }
+
+  const initial = list[0].key;
+  els.profileSelect.value = initial;
+  setProfile(initial);
+  return true;
+}
+
+/** 切换档案：先确认丢弃未保存的草稿，再加载新档案的配置。 */
+async function switchProfile(next) {
+  if (next === getProfile()) return;
+  if (state.dirty) {
+    const ok = await askConfirm(
+      "切换档案会丢弃当前未保存的更改，确认切换吗？",
+      "切换",
+    );
+    if (!ok) {
+      els.profileSelect.value = getProfile();
+      return;
+    }
+  }
+  setProfile(next);
+  state.dirty = false;
+  await load();
+}
+
+els.profileSelect.addEventListener("change", (e) => {
+  switchProfile(e.target.value);
+});
+
 /* ---------------------------------------------------------------- 启动 */
 
 async function load() {
   setStatus("加载中…");
   try {
-    const data = await get("config");
+    const data = await get("config", { profile: getProfile() });
     if (data.limits) state.limits = { ...data.limits };
     if (typeof data.default_thought_rule === "string") {
       state.defaultThoughtRule = data.default_thought_rule;
@@ -147,4 +202,8 @@ async function load() {
 }
 
 await bridge.ready();
-await load();
+if (await loadProfiles()) {
+  await load();
+} else {
+  setStatus("没有可用档案", "err");
+}
